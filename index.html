@@ -93,12 +93,141 @@ function useSound(mutedRef){
 }
 
 function useAmbientMusic(mutedRef){
-  const acRef=useRef(null),dgRef=useRef(null),oscsRef=useRef([]),cRef=useRef(null),aRef=useRef(false);
-  function getAC(){if(!acRef.current)acRef.current=new(window.AudioContext||window.webkitAudioContext)();if(acRef.current.state==="suspended")acRef.current.resume();return acRef.current;}
-  function scheduleChime(){if(!aRef.current)return;const ac=acRef.current;if(!ac)return;cRef.current=setTimeout(()=>{if(!aRef.current||mutedRef.current){scheduleChime();return;}const sc=[220,261.63,293.66,329.63,392,440,523.25,587.33];const fs=[sc[Math.floor(Math.random()*sc.length)]];if(Math.random()>0.6)fs.push(sc[Math.floor(Math.random()*sc.length)]);fs.forEach(f=>{const o=ac.createOscillator(),g=ac.createGain();o.type="sine";o.frequency.value=f;const now=ac.currentTime,dur=2+Math.random()*2.5;g.gain.setValueAtTime(0,now);g.gain.linearRampToValueAtTime(0.032,now+0.35);g.gain.exponentialRampToValueAtTime(0.001,now+dur);o.connect(g);g.connect(ac.destination);o.start(now);o.stop(now+dur+0.1);});scheduleChime();},(2+Math.random()*4)*1000);}
-  function start(){if(aRef.current)return;try{const ac=getAC();aRef.current=true;const mg=ac.createGain();mg.gain.setValueAtTime(0,ac.currentTime);if(!mutedRef.current)mg.gain.linearRampToValueAtTime(0.045,ac.currentTime+4);mg.connect(ac.destination);dgRef.current=mg;[55,55.35,82.5,82.15].forEach(f=>{const o=ac.createOscillator();o.type="sine";o.frequency.value=f;o.connect(mg);o.start();oscsRef.current.push(o);});const lfo=ac.createOscillator(),lfog=ac.createGain();lfo.type="sine";lfo.frequency.value=0.04;lfog.gain.value=0.012;lfo.connect(lfog);lfog.connect(mg.gain);lfo.start();oscsRef.current.push(lfo);scheduleChime();}catch(e){}}
-  function stop(){aRef.current=false;if(cRef.current){clearTimeout(cRef.current);cRef.current=null;}oscsRef.current.forEach(o=>{try{o.stop(0);o.disconnect();}catch(e){}});oscsRef.current=[];dgRef.current=null;}
-  function setMuted(m){if(!dgRef.current||!acRef.current)return;const now=acRef.current.currentTime;dgRef.current.gain.cancelScheduledValues(now);dgRef.current.gain.linearRampToValueAtTime(m?0:0.045,now+0.6);}
+  const acRef=useRef(null),masterRef=useRef(null),nodesRef=useRef([]),beatRef=useRef(null),melodyRef=useRef(null),aRef=useRef(false);
+
+  // Lo-fi chord progression: Cmaj7 → Am7 → Fmaj7 → G7 (frequencies in Hz)
+  const CHORDS=[
+    [261.63,329.63,392,493.88],  // Cmaj7
+    [220,261.63,329.63,415.30],  // Am7
+    [174.61,220,261.63,329.63],  // Fmaj7
+    [196,246.94,293.66,392],     // G7
+  ];
+  // Pentatonic melody notes (C major pentatonic, mid register)
+  const MEL_NOTES=[261.63,293.66,329.63,392,440,523.25,587.33,659.25];
+
+  function getAC(){
+    if(!acRef.current)acRef.current=new(window.AudioContext||window.webkitAudioContext)();
+    if(acRef.current.state==="suspended")acRef.current.resume();
+    return acRef.current;
+  }
+
+  function makeNote(ac,freq,vol,startTime,dur,wave="sine"){
+    const osc=ac.createOscillator(),g=ac.createGain();
+    osc.type=wave; osc.frequency.value=freq;
+    // Slight detune for lo-fi warmth
+    osc.detune.value=(Math.random()-0.5)*8;
+    g.gain.setValueAtTime(0,startTime);
+    g.gain.linearRampToValueAtTime(vol,startTime+0.06);
+    g.gain.setValueAtTime(vol,startTime+dur*0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001,startTime+dur);
+    osc.connect(g); g.connect(masterRef.current);
+    osc.start(startTime); osc.stop(startTime+dur+0.05);
+    nodesRef.current.push(osc);
+    return osc;
+  }
+
+  function playChord(ac,chordIdx,when){
+    const freqs=CHORDS[chordIdx%CHORDS.length];
+    freqs.forEach((f,i)=>{
+      // Arpeggiate slightly for lo-fi feel
+      const offset=i*0.04;
+      makeNote(ac,f*0.5,0.022,when+offset,3.2,"sine"); // bass octave down
+      makeNote(ac,f,0.018,when+offset+0.01,3.0,"triangle");
+    });
+  }
+
+  function playMelody(ac,when){
+    // Gentle 4-note melodic phrase
+    const len=4;
+    for(let i=0;i<len;i++){
+      if(Math.random()<0.3){continue;} // occasional rests for lo-fi feel
+      const note=MEL_NOTES[Math.floor(Math.random()*MEL_NOTES.length)];
+      const t=when+i*0.75+(Math.random()*0.08); // slight timing imperfection
+      const dur=0.5+Math.random()*0.4;
+      makeNote(ac,note,0.028,t,dur,"sine");
+    }
+  }
+
+  function addVinylNoise(ac){
+    // Subtle vinyl crackle via filtered noise
+    try{
+      const buf=ac.createBuffer(1,ac.sampleRate*2,ac.sampleRate);
+      const data=buf.getChannelData(0);
+      for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*0.008;
+      const src=ac.createBufferSource();src.buffer=buf;src.loop=true;
+      const filt=ac.createBiquadFilter();filt.type="bandpass";filt.frequency.value=3000;filt.Q.value=0.5;
+      const g=ac.createGain();g.gain.value=0.4;
+      src.connect(filt);filt.connect(g);g.connect(masterRef.current);
+      src.start();
+      nodesRef.current.push(src);
+    }catch(e){}
+  }
+
+  function scheduleBeat(ac,when,chordIdx){
+    if(!aRef.current)return;
+    // Soft kick on beats 1 & 3
+    [0,1.0].forEach(offset=>{
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type="sine";o.frequency.setValueAtTime(80,when+offset);
+      o.frequency.exponentialRampToValueAtTime(40,when+offset+0.12);
+      g.gain.setValueAtTime(0,when+offset);g.gain.linearRampToValueAtTime(0.06,when+offset+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001,when+offset+0.18);
+      o.connect(g);g.connect(masterRef.current);o.start(when+offset);o.stop(when+offset+0.2);
+      nodesRef.current.push(o);
+    });
+    // Hi-hat 8th notes
+    for(let i=0;i<8;i++){
+      const t=when+i*0.25;
+      const buf=ac.createBuffer(1,ac.sampleRate*0.06,ac.sampleRate);
+      const d=buf.getChannelData(0);for(let j=0;j<d.length;j++)d[j]=(Math.random()*2-1);
+      const src=ac.createBufferSource();src.buffer=buf;
+      const filt=ac.createBiquadFilter();filt.type="highpass";filt.frequency.value=8000;
+      const g=ac.createGain();const vel=i%2===0?0.025:0.014; // accent on downbeats
+      g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vel,t+0.005);g.gain.exponentialRampToValueAtTime(0.0001,t+0.055);
+      src.connect(filt);filt.connect(g);g.connect(masterRef.current);
+      src.start(t);nodesRef.current.push(src);
+    }
+  }
+
+  function loop(chordIdx){
+    if(!aRef.current)return;
+    const ac=acRef.current;if(!ac)return;
+    const barLen=2.0; // 2 seconds per bar ~120bpm / 4 bars = 8s cycle
+    const now=ac.currentTime;
+    playChord(ac,chordIdx,now);
+    if(Math.random()<0.6)playMelody(ac,now+0.5);
+    scheduleBeat(ac,now,chordIdx);
+    melodyRef.current=setTimeout(()=>loop(chordIdx+1),(barLen*1000)-50);
+  }
+
+  function start(){
+    if(aRef.current)return;
+    try{
+      const ac=getAC();aRef.current=true;
+      const mg=ac.createGain();
+      mg.gain.setValueAtTime(0,ac.currentTime);
+      masterRef.current=mg;mg.connect(ac.destination);
+      if(!mutedRef.current)mg.gain.linearRampToValueAtTime(0.7,ac.currentTime+3);
+      addVinylNoise(ac);
+      beatRef.current=setTimeout(()=>loop(0),800);
+    }catch(e){}
+  }
+
+  function stop(){
+    aRef.current=false;
+    if(beatRef.current){clearTimeout(beatRef.current);beatRef.current=null;}
+    if(melodyRef.current){clearTimeout(melodyRef.current);melodyRef.current=null;}
+    nodesRef.current.forEach(n=>{try{n.stop(0);n.disconnect();}catch(e){}});
+    nodesRef.current=[];masterRef.current=null;
+  }
+
+  function setMuted(m){
+    if(!masterRef.current||!acRef.current)return;
+    const now=acRef.current.currentTime;
+    masterRef.current.gain.cancelScheduledValues(now);
+    masterRef.current.gain.linearRampToValueAtTime(m?0:0.7,now+0.5);
+  }
+
   return{start,stop,setMuted};
 }
 
@@ -222,9 +351,11 @@ function OnlineLobby({onBack,onGameReady,savedDbUrl,onSaveDbUrl}){
       const r=await fetch(url+"/games/"+code+".json");const data=await r.json();
       if(!data){setError("Room not found.");setLoading(false);return;}
       if(data.players&&data.players.orange===true){setError("Room is full.");setLoading(false);return;}
-      await fetch(url+"/games/"+code+"/players/orange.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:"true"});
+      // PUT the full state so Firebase sends a "put" event (not "patch") to the creator's SSE listener
+      const updatedState={...data,players:{green:true,orange:true}};
+      await fetch(url+"/games/"+code+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(updatedState)});
       onSaveDbUrl(url);
-      onGameReady({dbUrl:url,roomCode:code,myColor:"orange",initState:{...data,players:{green:true,orange:true}}});
+      onGameReady({dbUrl:url,roomCode:code,myColor:"orange",initState:updatedState});
     }catch(e){setError("Could not join: "+e.message);}
     setLoading(false);
   }
