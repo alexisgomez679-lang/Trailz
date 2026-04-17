@@ -93,139 +93,46 @@ function useSound(mutedRef){
 }
 
 function useAmbientMusic(mutedRef){
-  const acRef=useRef(null),masterRef=useRef(null),nodesRef=useRef([]),beatRef=useRef(null),melodyRef=useRef(null),aRef=useRef(false);
-
-  // Lo-fi chord progression: Cmaj7 → Am7 → Fmaj7 → G7 (frequencies in Hz)
-  const CHORDS=[
-    [261.63,329.63,392,493.88],  // Cmaj7
-    [220,261.63,329.63,415.30],  // Am7
-    [174.61,220,261.63,329.63],  // Fmaj7
-    [196,246.94,293.66,392],     // G7
-  ];
-  // Pentatonic melody notes (C major pentatonic, mid register)
-  const MEL_NOTES=[261.63,293.66,329.63,392,440,523.25,587.33,659.25];
-
-  function getAC(){
-    if(!acRef.current)acRef.current=new(window.AudioContext||window.webkitAudioContext)();
-    if(acRef.current.state==="suspended")acRef.current.resume();
-    return acRef.current;
-  }
-
-  function makeNote(ac,freq,vol,startTime,dur,wave="sine"){
-    const osc=ac.createOscillator(),g=ac.createGain();
-    osc.type=wave; osc.frequency.value=freq;
-    // Slight detune for lo-fi warmth
-    osc.detune.value=(Math.random()-0.5)*8;
-    g.gain.setValueAtTime(0,startTime);
-    g.gain.linearRampToValueAtTime(vol,startTime+0.06);
-    g.gain.setValueAtTime(vol,startTime+dur*0.7);
-    g.gain.exponentialRampToValueAtTime(0.0001,startTime+dur);
-    osc.connect(g); g.connect(masterRef.current);
-    osc.start(startTime); osc.stop(startTime+dur+0.05);
-    nodesRef.current.push(osc);
-    return osc;
-  }
-
-  function playChord(ac,chordIdx,when){
-    const freqs=CHORDS[chordIdx%CHORDS.length];
-    freqs.forEach((f,i)=>{
-      // Arpeggiate slightly for lo-fi feel
-      const offset=i*0.04;
-      makeNote(ac,f*0.5,0.022,when+offset,3.2,"sine"); // bass octave down
-      makeNote(ac,f,0.018,when+offset+0.01,3.0,"triangle");
-    });
-  }
-
-  function playMelody(ac,when){
-    // Gentle 4-note melodic phrase
-    const len=4;
-    for(let i=0;i<len;i++){
-      if(Math.random()<0.3){continue;} // occasional rests for lo-fi feel
-      const note=MEL_NOTES[Math.floor(Math.random()*MEL_NOTES.length)];
-      const t=when+i*0.75+(Math.random()*0.08); // slight timing imperfection
-      const dur=0.5+Math.random()*0.4;
-      makeNote(ac,note,0.028,t,dur,"sine");
-    }
-  }
-
-  function addVinylNoise(ac){
-    // Subtle vinyl crackle via filtered noise
-    try{
-      const buf=ac.createBuffer(1,ac.sampleRate*2,ac.sampleRate);
-      const data=buf.getChannelData(0);
-      for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*0.008;
-      const src=ac.createBufferSource();src.buffer=buf;src.loop=true;
-      const filt=ac.createBiquadFilter();filt.type="bandpass";filt.frequency.value=3000;filt.Q.value=0.5;
-      const g=ac.createGain();g.gain.value=0.4;
-      src.connect(filt);filt.connect(g);g.connect(masterRef.current);
-      src.start();
-      nodesRef.current.push(src);
-    }catch(e){}
-  }
-
-  function scheduleBeat(ac,when,chordIdx){
-    if(!aRef.current)return;
-    // Soft kick on beats 1 & 3
-    [0,1.0].forEach(offset=>{
-      const o=ac.createOscillator(),g=ac.createGain();
-      o.type="sine";o.frequency.setValueAtTime(80,when+offset);
-      o.frequency.exponentialRampToValueAtTime(40,when+offset+0.12);
-      g.gain.setValueAtTime(0,when+offset);g.gain.linearRampToValueAtTime(0.06,when+offset+0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001,when+offset+0.18);
-      o.connect(g);g.connect(masterRef.current);o.start(when+offset);o.stop(when+offset+0.2);
-      nodesRef.current.push(o);
-    });
-    // Hi-hat 8th notes
-    for(let i=0;i<8;i++){
-      const t=when+i*0.25;
-      const buf=ac.createBuffer(1,ac.sampleRate*0.06,ac.sampleRate);
-      const d=buf.getChannelData(0);for(let j=0;j<d.length;j++)d[j]=(Math.random()*2-1);
-      const src=ac.createBufferSource();src.buffer=buf;
-      const filt=ac.createBiquadFilter();filt.type="highpass";filt.frequency.value=8000;
-      const g=ac.createGain();const vel=i%2===0?0.025:0.014; // accent on downbeats
-      g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vel,t+0.005);g.gain.exponentialRampToValueAtTime(0.0001,t+0.055);
-      src.connect(filt);filt.connect(g);g.connect(masterRef.current);
-      src.start(t);nodesRef.current.push(src);
-    }
-  }
-
-  function loop(chordIdx){
-    if(!aRef.current)return;
-    const ac=acRef.current;if(!ac)return;
-    const barLen=2.0; // 2 seconds per bar ~120bpm / 4 bars = 8s cycle
-    const now=ac.currentTime;
-    playChord(ac,chordIdx,now);
-    if(Math.random()<0.6)playMelody(ac,now+0.5);
-    scheduleBeat(ac,now,chordIdx);
-    melodyRef.current=setTimeout(()=>loop(chordIdx+1),(barLen*1000)-50);
-  }
+  const audioRef=useRef(null);
 
   function start(){
-    if(aRef.current)return;
+    if(audioRef.current)return;
     try{
-      const ac=getAC();aRef.current=true;
-      const mg=ac.createGain();
-      mg.gain.setValueAtTime(0,ac.currentTime);
-      masterRef.current=mg;mg.connect(ac.destination);
-      if(!mutedRef.current)mg.gain.linearRampToValueAtTime(0.7,ac.currentTime+3);
-      addVinylNoise(ac);
-      beatRef.current=setTimeout(()=>loop(0),800);
+      const audio=new Audio("https://alexisgomez679-lang.github.io/Trailz/Under_the_Ferns.mp3");
+      audio.loop=true;
+      audio.volume=mutedRef.current?0:0.6;
+      audioRef.current=audio;
+      const playPromise=audio.play();
+      if(playPromise!==undefined){
+        playPromise.catch(()=>{
+          // Autoplay blocked — play on next user interaction
+          const resume=()=>{ audio.play(); document.removeEventListener("click",resume); document.removeEventListener("touchend",resume); };
+          document.addEventListener("click",resume,{once:true});
+          document.addEventListener("touchend",resume,{once:true});
+        });
+      }
     }catch(e){}
   }
 
   function stop(){
-    aRef.current=false;
-    if(beatRef.current){clearTimeout(beatRef.current);beatRef.current=null;}
-    if(melodyRef.current){clearTimeout(melodyRef.current);melodyRef.current=null;}
-    nodesRef.current.forEach(n=>{try{n.stop(0);n.disconnect();}catch(e){}});
-    nodesRef.current=[];masterRef.current=null;
+    if(!audioRef.current)return;
+    audioRef.current.pause();
+    audioRef.current.currentTime=0;
+    audioRef.current=null;
   }
 
   function setMuted(m){
-    if(!masterRef.current||!acRef.current)return;
-    const now=acRef.current.currentTime;
-    masterRef.current.gain.cancelScheduledValues(now);
-    masterRef.current.gain.linearRampToValueAtTime(m?0:0.7,now+0.5);
+    if(!audioRef.current)return;
+    // Smooth fade
+    const audio=audioRef.current;
+    const target=m?0:0.6;
+    const step=m?-0.05:0.05;
+    const fade=setInterval(()=>{
+      const next=audio.volume+step;
+      if(m&&next<=0){ audio.volume=0; clearInterval(fade); }
+      else if(!m&&next>=target){ audio.volume=target; clearInterval(fade); }
+      else audio.volume=Math.max(0,Math.min(1,next));
+    },40);
   }
 
   return{start,stop,setMuted};
@@ -459,14 +366,18 @@ function Trailz(){
   const[timers,setTimers]=useState(null);const[moveCount,setMoveCount]=useState(0);
   const[muted,setMutedState]=useState(false);const[colorblind,setColorblind]=useState(false);const[copied,setCopied]=useState(false);
   const[onlineConfig,setOnlineConfig]=useState(null);const[savedDbUrl,setSavedDbUrl]=useState(()=>localStorage.getItem("trailz:dburl")||"");const[onlineStatus,setOnlineStatus]=useState("");
-  const mutedRef=useRef(false),bsRef=useRef(null),stateRef=useRef({}),esRef=useRef(null),writtenMoveCountRef=useRef(0),onlineConfigRef=useRef(null);
+  const mutedRef=useRef(false),bsRef=useRef(null),stateRef=useRef({}),esRef=useRef(null),writtenMoveCountRef=useRef(0),onlineConfigRef=useRef(null),mapKeyRef=useRef("classic");
   const bs=useBoardSize();bsRef.current=bs;
   const[stats,saveStats,resetStats]=useStats();
   const sound=useSound(mutedRef),ambient=useAmbientMusic(mutedRef);
   stateRef.current={mode,stats,mapKey,timers,winner,moveCount,onlineConfig,captured};
   onlineConfigRef.current=onlineConfig;
   const{cell,pad,bw,bh}=bs;
-  const px=c=>pad+c*cell,py=r=>pad+r*cell;
+  // Always keep mapKeyRef current so handlers never read stale state
+  mapKeyRef.current=(mode==="online"&&onlineConfig?.resolvedMapKey)?onlineConfig.resolvedMapKey:mapKey;
+  const flipped=mode==="online"&&onlineConfig&&onlineConfig.myColor==="orange";
+  const px=c=>pad+c*cell;
+  const py=r=>flipped?pad+(ROWS-1-r)*cell:pad+r*cell;
   const pieceR=Math.max(13,Math.floor(cell*0.33)),nodeRb=Math.max(8,Math.floor(cell*0.19)),nodeRs=Math.max(5,Math.floor(cell*0.13)),tapR=Math.max(20,Math.floor(cell*0.42));
 
   function toggleMute(){const next=!mutedRef.current;mutedRef.current=next;setMutedState(next);ambient.setMuted(next);}
@@ -490,7 +401,10 @@ function Trailz(){
   function writeToFirebase(state){const cfg=onlineConfigRef.current;if(!cfg)return;writtenMoveCountRef.current=state.moveCount;fetch(cfg.dbUrl+"/games/"+cfg.roomCode+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(state)}).catch(()=>setOnlineStatus("Write failed."));}
 
   function handleGameReady(cfg){
-    setOnlineConfig(cfg);setMapKey(cfg.initState.mapKey||"classic");setMode("online");setShowOnlineLobby(false);
+    const resolvedMapKey=cfg.initState.mapKey||"classic";
+    mapKeyRef.current=resolvedMapKey;
+    setOnlineConfig({...cfg,resolvedMapKey});
+    setMapKey(resolvedMapKey);setMode("online");setShowOnlineLobby(false);
     const s=cfg.initState;setPcs({...s.pcs});setRes({green:{...s.res.green},orange:{...s.res.orange}});setTurn(s.turn||"green");setLastMove(s.lastMove||null);setCaptured({green:[...(s.captured?.green||[])],orange:[...(s.captured?.orange||[])]});setWinner(s.winner||null);setMoveCount(s.moveCount||0);writtenMoveCountRef.current=s.moveCount||0;
     if(cfg.myColor==="green"&&(!s.players||!s.players.orange))setOnlineStatus("Waiting for opponent…");
     ambient.start();startListening(cfg.dbUrl,cfg.roomCode);
@@ -543,7 +457,7 @@ function Trailz(){
   useEffect(()=>{if(mode==="ai"&&turn==="orange"&&!winner&&!aiOn){const t=setTimeout(()=>doAI(pcs,res,captured,diff,mapKey),750);return()=>clearTimeout(t);}},[mode,turn,winner,aiOn,pcs,res,captured,diff,doAI,mapKey]);
 
   function commit(np,nr,nc,fromK,toK,curTurn,piece,eaten){
-    const bl=MAPS[mapKey].blocked,hasEat=!!eaten,ate=eaten?{kind:eaten.kind}:null;
+    const bl=MAPS[mapKeyRef.current].blocked,hasEat=!!eaten,ate=eaten?{kind:eaten.kind}:null;
     if(hasEat){const tp=pk(toK);setCapFlash({x:px(tp[1]),y:py(tp[0]),t:Date.now()});setTimeout(()=>setCapFlash(null),600);}
     if(fromK)startSlide(fromK,toK);
     sound(hasEat?"capture":fromK?"move":"place",curTurn);
@@ -551,7 +465,7 @@ function Trailz(){
     addLog(fromK?`${who} move ${piece.kind}${hasEat?", eat "+eaten.kind:""}`:`${who} place ${piece.kind}`);
     const lm={fromK:fromK||null,toK,player:curTurn,ate},newMC=moveCount+1,nextPlayer=curTurn==="green"?"orange":"green";
     const nw=finishTurn(np,nr,nc,nextPlayer,bl,lm,newMC);
-    if(mode==="online"&&onlineConfig)writeToFirebase({pcs:np,res:nr,captured:nc,turn:nw?curTurn:nextPlayer,lastMove:lm,winner:nw||null,moveCount:newMC,mapKey,players:{green:true,orange:true}});
+    if(mode==="online"&&onlineConfig)writeToFirebase({pcs:np,res:nr,captured:nc,turn:nw?curTurn:nextPlayer,lastMove:lm,winner:nw||null,moveCount:newMC,mapKey:mapKeyRef.current,players:{green:true,orange:true}});
   }
 
   function clickNode(r,c){
@@ -633,8 +547,8 @@ function Trailz(){
         <svg width={bw} height={bh} style={{background:map.bg,borderRadius:"var(--border-radius-lg)",border:"0.5px solid rgba(90,50,10,0.4)",display:"block",touchAction:"manipulation"}}>
           {Array.from({length:ROWS},(_,r)=><text key={"rl"+r} x={9} y={py(r)+3} textAnchor="middle" fontSize={7} fill="rgba(255,255,255,0.22)" fontFamily="sans-serif">{r}</text>)}
           {Array.from({length:COLS},(_,c)=><text key={"cl"+c} x={px(c)} y={13} textAnchor="middle" fontSize={7} fill="rgba(255,255,255,0.22)" fontFamily="sans-serif">{c}</text>)}
-          <text x={bw-8} y={py(0)+3} textAnchor="end" fontSize={7} fill="#f97316" opacity={0.3} fontFamily="sans-serif">{mode==="ai"?"AI home":"orange"}</text>
-          <text x={bw-8} y={py(6)+3} textAnchor="end" fontSize={7} fill="#22c55e" opacity={0.3} fontFamily="sans-serif">{mode==="ai"||mode==="online"?"your home":"green"}</text>
+          <text x={bw-8} y={py(0)+3} textAnchor="end" fontSize={7} fill="#f97316" opacity={0.3} fontFamily="sans-serif">{flipped?"your home":mode==="ai"?"AI home":"orange"}</text>
+          <text x={bw-8} y={py(6)+3} textAnchor="end" fontSize={7} fill="#22c55e" opacity={0.3} fontFamily="sans-serif">{flipped?"opponent":mode==="ai"||mode==="online"?"your home":"green"}</text>
           {slLines.map((s,i)=><line key={"sl"+i} x1={px(s[1])} y1={py(s[0])} x2={px(s[3])} y2={py(s[2])} stroke={map.slime} strokeWidth={Math.max(4,Math.floor(cell*0.085))} strokeLinecap="round"/>)}
           {mycLines.map((m,i)=><line key={"my"+i} x1={px(m[1])} y1={py(m[0])} x2={px(m[3])} y2={py(m[2])} stroke={map.myc} strokeWidth={Math.max(3,Math.floor(cell*0.065))} strokeLinecap="round"/>)}
           {lastMove&&lastMove.fromK&&(()=>{const fp=pk(lastMove.fromK),tp=pk(lastMove.toK);return <><circle cx={px(fp[1])} cy={py(fp[0])} r={pieceR+6} fill="rgba(255,210,0,0.07)" stroke="rgba(255,210,0,0.35)" strokeWidth={1.5}/><circle cx={px(tp[1])} cy={py(tp[0])} r={pieceR+6} fill="rgba(255,210,0,0.13)" stroke="rgba(255,210,0,0.6)" strokeWidth={2}/>;</>;})()}
