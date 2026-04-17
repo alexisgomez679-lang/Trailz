@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Trailz</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+:root{
+  --color-text-primary:#1a1a1a;--color-text-secondary:#555;--color-background-primary:#fff;
+  --color-background-secondary:#f2f2f0;--color-border-tertiary:rgba(0,0,0,0.12);
+  --color-border-secondary:rgba(0,0,0,0.22);--color-border-primary:rgba(0,0,0,0.38);
+  --border-radius-md:8px;--border-radius-lg:12px;--border-radius-xl:16px;
+  --font-sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+@media(prefers-color-scheme:dark){:root{
+  --color-text-primary:#f0ede8;--color-text-secondary:#aaa;--color-background-primary:#1c1c1a;
+  --color-background-secondary:#252522;--color-border-tertiary:rgba(255,255,255,0.1);
+  --color-border-secondary:rgba(255,255,255,0.18);--color-border-primary:rgba(255,255,255,0.32);
+}}
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;font-family:var(--font-sans);background:var(--color-background-primary);color:var(--color-text-primary);}
+#root{min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:8px 4px;}
+button{font-family:inherit;background:transparent;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);cursor:pointer;color:var(--color-text-primary);transition:background 0.15s;}
+button:hover:not(:disabled){background:var(--color-background-secondary);}
+button:disabled{opacity:0.35;cursor:not-allowed;}
+input{font-family:inherit;background:var(--color-background-secondary);border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);color:var(--color-text-primary);padding:8px 12px;outline:none;transition:border-color 0.15s;}
+input:focus{border-color:var(--color-border-primary);}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+window.storage={
+  async get(k){try{const v=localStorage.getItem('trailz:'+k);return v?{value:v}:null;}catch(e){return null;}},
+  async set(k,v){try{localStorage.setItem('trailz:'+k,v);return{value:v};}catch(e){return null;}}
+};
+</script>
+<script type="text/babel">
+const{useState,useEffect,useCallback,useRef}=React;
+
+const ROWS=7,COLS=7;
+function isValid(r,c){return r>=0&&r<ROWS&&c>=0&&c<COLS&&(r+c)%2===0;}
+function isGDot(r,c){return isValid(r,c)&&r%2===0;}
+function ck(r,c){return r+","+c;}
+function pk(s){const p=s.split(",");return[parseInt(p[0]),parseInt(p[1])];}
+function homeRow(pl){return pl==="green"?6:0;}
+function fmt(s){return Math.floor(s/60)+":"+(s%60<10?"0":"")+(s%60);}
+function isOnMap(r,c,bl){return isValid(r,c)&&!bl.has(ck(r,c));}
+function pct(n,d){return d===0?"—":Math.round(n/d*100)+"%";}
+function generateCode(){const ch="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";let c="";for(let i=0;i<4;i++)c+=ch[Math.floor(Math.random()*ch.length)];return c;}
+
+function shroomMoves(r,c,own,pcs,bl){const dr=own==="green"?-1:1;return[[r+dr,c-1],[r+dr,c+1]].filter(d=>isOnMap(d[0],d[1],bl)&&!pcs[ck(d[0],d[1])]);}
+function slugMoves(r,c,own,pcs,bl){return[[r,c+2],[r,c-2],[r+2,c],[r-2,c]].filter(d=>{const nr=d[0],nc=d[1];return isGDot(nr,nc)&&!bl.has(ck(nr,nc))&&(!pcs[ck(nr,nc)]||pcs[ck(nr,nc)].owner!==own);});}
+function homeDests(player,pcs,bl){return[0,2,4,6].filter(c=>!pcs[ck(homeRow(player),c)]&&!bl.has(ck(homeRow(player),c))).map(c=>[homeRow(player),c]);}
+function checkWin(pcs){for(const k in pcs){const p=pcs[k];if(!p)continue;const r=pk(k)[0];if(p.kind==="shroom"&&((p.owner==="green"&&r===0)||(p.owner==="orange"&&r===6)))return p.owner;}return null;}
+function getAllMoves(pcs,res,player,bl){
+  const mv=[];
+  for(const k in pcs){const p=pcs[k];if(!p||p.owner!==player)continue;const pos=pk(k),r=pos[0],c=pos[1];const ds=p.kind==="shroom"?shroomMoves(r,c,player,pcs,bl):slugMoves(r,c,player,pcs,bl);for(let i=0;i<ds.length;i++)mv.push({type:"move",fromK:k,toK:ck(ds[i][0],ds[i][1]),eaten:pcs[ck(ds[i][0],ds[i][1])]||null,piece:p});}
+  const dests=homeDests(player,pcs,bl);for(let j=0;j<dests.length;j++){if(res[player].shrooms>0)mv.push({type:"place",kind:"shroom",toK:ck(dests[j][0],dests[j][1])});if(res[player].slugs>0)mv.push({type:"place",kind:"slug",toK:ck(dests[j][0],dests[j][1])});}
+  return mv;
+}
+function scoreMove(m,pl){let s=Math.random()*0.8;if(m.type==="move"){if(m.eaten)s+=m.eaten.kind==="shroom"?30:15;if(m.piece.kind==="shroom"){const fr=pk(m.fromK)[0],tr=pk(m.toK)[0];s+=(pl==="green"?fr-tr:tr-fr)*10;s+=(pl==="green"?6-tr:tr)*2;}}else s+=m.kind==="shroom"?8:4;return s;}
+
+const MAPS={
+  classic:{name:"Classic",desc:"Standard board",blocked:new Set(),bg:"#0c0900",slime:"#163d1e",myc:"#2a1004",slimeNode:"#112a16",slimeStroke:"#1d5422",mycNode:"#160a03",mycStroke:"#3d1a08",blockFill:"#1a1208",blockStroke:"#443322"},
+  split:{name:"Split",desc:"Center blocked",blocked:new Set(["1,3","3,3","5,3"]),bg:"#04080e",slime:"#102038",myc:"#180810",slimeNode:"#0d1a2e",slimeStroke:"#183050",mycNode:"#100608",mycStroke:"#281020",blockFill:"#0e1828",blockStroke:"#203860"},
+  fortress:{name:"Fortress",desc:"Flanks blocked",blocked:new Set(["2,0","2,6","4,0","4,6"]),bg:"#0d0500",slime:"#1a2a0e",myc:"#2c0a06",slimeNode:"#122010",slimeStroke:"#1e3818",mycNode:"#120602",mycStroke:"#301008",blockFill:"#200a06",blockStroke:"#5a2010"},
+};
+const INIT_PCS={[ck(6,0)]:{kind:"shroom",owner:"green"},[ck(6,4)]:{kind:"shroom",owner:"green"},[ck(6,2)]:{kind:"slug",owner:"green"},[ck(0,2)]:{kind:"shroom",owner:"orange"},[ck(0,6)]:{kind:"shroom",owner:"orange"},[ck(0,4)]:{kind:"slug",owner:"orange"}};
+const INIT_RES={green:{shrooms:2,slugs:1},orange:{shrooms:2,slugs:1}};
+const PC={green:{fill:"#0c3a1c",stroke:"#22c55e"},orange:{fill:"#481c00",stroke:"#f97316"}};
+const DEFAULT_STATS={ai:{w:0,l:0,d:0,streak:0,best:0,moves:0},p2:{g:0,o:0,d:0,moves:0},maps:{classic:{w:0,l:0,d:0},split:{w:0,l:0,d:0},fortress:{w:0,l:0,d:0}}};
+
+function useSound(mutedRef){
+  const acRef=useRef(null);
+  return useCallback(function(type,player){
+    if(mutedRef.current)return;
+    try{
+      if(!acRef.current)acRef.current=new(window.AudioContext||window.webkitAudioContext)();
+      const ac=acRef.current;if(ac.state==="suspended")ac.resume();
+      const now=ac.currentTime;
+      function tone(freq,wave,vol,t0,dur,f2){const osc=ac.createOscillator(),g=ac.createGain();osc.connect(g);g.connect(ac.destination);osc.type=wave;osc.frequency.setValueAtTime(freq,now+t0);if(f2)osc.frequency.exponentialRampToValueAtTime(f2,now+t0+dur);g.gain.setValueAtTime(0,now+t0);g.gain.linearRampToValueAtTime(vol,now+t0+0.015);g.gain.exponentialRampToValueAtTime(0.001,now+t0+dur);osc.start(now+t0);osc.stop(now+t0+dur+0.02);}
+      const isG=player==="green";
+      if(type==="move")tone(isG?500:290,"sine",0.13,0,0.09);
+      else if(type==="place"){tone(isG?420:240,"triangle",0.15,0,0.1);tone(isG?630:360,"sine",0.06,0,0.12);}
+      else if(type==="capture"){tone(640,"sawtooth",0.2,0,0.18,160);tone(270,"square",0.1,0,0.15);}
+      else if(type==="win")[440,554,659,880].forEach((f,i)=>tone(f,"sine",0.18,i*0.1,0.3));
+    }catch(e){}
+  },[mutedRef]);
+}
+
+function useAmbientMusic(mutedRef){
+  const acRef=useRef(null),dgRef=useRef(null),oscsRef=useRef([]),cRef=useRef(null),aRef=useRef(false);
+  function getAC(){if(!acRef.current)acRef.current=new(window.AudioContext||window.webkitAudioContext)();if(acRef.current.state==="suspended")acRef.current.resume();return acRef.current;}
+  function scheduleChime(){if(!aRef.current)return;const ac=acRef.current;if(!ac)return;cRef.current=setTimeout(()=>{if(!aRef.current||mutedRef.current){scheduleChime();return;}const sc=[220,261.63,293.66,329.63,392,440,523.25,587.33];const fs=[sc[Math.floor(Math.random()*sc.length)]];if(Math.random()>0.6)fs.push(sc[Math.floor(Math.random()*sc.length)]);fs.forEach(f=>{const o=ac.createOscillator(),g=ac.createGain();o.type="sine";o.frequency.value=f;const now=ac.currentTime,dur=2+Math.random()*2.5;g.gain.setValueAtTime(0,now);g.gain.linearRampToValueAtTime(0.032,now+0.35);g.gain.exponentialRampToValueAtTime(0.001,now+dur);o.connect(g);g.connect(ac.destination);o.start(now);o.stop(now+dur+0.1);});scheduleChime();},(2+Math.random()*4)*1000);}
+  function start(){if(aRef.current)return;try{const ac=getAC();aRef.current=true;const mg=ac.createGain();mg.gain.setValueAtTime(0,ac.currentTime);if(!mutedRef.current)mg.gain.linearRampToValueAtTime(0.045,ac.currentTime+4);mg.connect(ac.destination);dgRef.current=mg;[55,55.35,82.5,82.15].forEach(f=>{const o=ac.createOscillator();o.type="sine";o.frequency.value=f;o.connect(mg);o.start();oscsRef.current.push(o);});const lfo=ac.createOscillator(),lfog=ac.createGain();lfo.type="sine";lfo.frequency.value=0.04;lfog.gain.value=0.012;lfo.connect(lfog);lfog.connect(mg.gain);lfo.start();oscsRef.current.push(lfo);scheduleChime();}catch(e){}}
+  function stop(){aRef.current=false;if(cRef.current){clearTimeout(cRef.current);cRef.current=null;}oscsRef.current.forEach(o=>{try{o.stop(0);o.disconnect();}catch(e){}});oscsRef.current=[];dgRef.current=null;}
+  function setMuted(m){if(!dgRef.current||!acRef.current)return;const now=acRef.current.currentTime;dgRef.current.gain.cancelScheduledValues(now);dgRef.current.gain.linearRampToValueAtTime(m?0:0.045,now+0.6);}
+  return{start,stop,setMuted};
+}
+
+function useBoardSize(){
+  function calc(){const w=window.innerWidth;const cell=Math.max(42,Math.floor((Math.min(w-24,480)-52)/6));return{cell,pad:26,bw:6*cell+52,bh:6*cell+52};}
+  const[bs,set]=useState(calc);
+  useEffect(()=>{const h=()=>set(calc());window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);
+  return bs;
+}
+
+function useStats(){
+  const[stats,setStats]=useState(DEFAULT_STATS);
+  useEffect(()=>{(async()=>{try{const r=await window.storage.get("s4");if(r)setStats(Object.assign({},DEFAULT_STATS,JSON.parse(r.value)));}catch(e){}})();},[]);
+  async function save(ns){setStats(ns);try{await window.storage.set("s4",JSON.stringify(ns));}catch(e){}}
+  async function resetStats(){await save(JSON.parse(JSON.stringify(DEFAULT_STATS)));}
+  return[stats,save,resetStats];
+}
+
+function Confetti({width,height}){
+  const ref=useRef(null);
+  useEffect(()=>{
+    const canvas=ref.current;if(!canvas)return;const ctx=canvas.getContext("2d");
+    const cols=["#22c55e","#f97316","#facc15","#60a5fa","#f472b6","#a78bfa","#34d399","#fb923c"];
+    const ps=Array.from({length:110},()=>({x:Math.random()*width,y:Math.random()*height*0.1-20,vx:(Math.random()-0.5)*4,vy:Math.random()*2.5+0.5,col:cols[Math.floor(Math.random()*cols.length)],sz:Math.random()*7+3,rot:Math.random()*360,rv:(Math.random()-0.5)*10,rect:Math.random()>0.4}));
+    const start=Date.now();let raf;
+    function draw(){const el=Date.now()-start;ctx.clearRect(0,0,width,height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.rot+=p.rv;p.vx*=0.99;if(p.y>height+10){p.y=-10;p.x=Math.random()*width;p.vy=Math.random()*2+0.5;}const alpha=el<2500?1:Math.max(0,1-(el-2500)/800);ctx.save();ctx.globalAlpha=alpha;ctx.fillStyle=p.col;ctx.translate(p.x,p.y);ctx.rotate(p.rot*Math.PI/180);if(p.rect)ctx.fillRect(-p.sz/2,-p.sz*0.3,p.sz,p.sz*0.6);else{ctx.beginPath();ctx.arc(0,0,p.sz/2,0,Math.PI*2);ctx.fill();}ctx.restore();});if(el<3300)raf=requestAnimationFrame(draw);else ctx.clearRect(0,0,width,height);}
+    raf=requestAnimationFrame(draw);return()=>cancelAnimationFrame(raf);
+  },[width,height]);
+  return <canvas ref={ref} width={width} height={height} style={{position:"absolute",top:0,left:0,pointerEvents:"none",zIndex:20,borderRadius:"var(--border-radius-lg)"}}/>;
+}
+
+function ThinkingDots(){return <span style={{display:"inline-flex",gap:"3px",alignItems:"center",marginLeft:"4px"}}>{[0,1,2].map(i=><span key={i} style={{width:"5px",height:"5px",borderRadius:"50%",background:PC.orange.stroke,display:"inline-block",animation:`dotPulse 1.2s ease-in-out ${i*0.2}s infinite`}}/>)}</span>;}
+
+function MuteIcon({muted}){return <svg width="14" height="14" viewBox="0 0 16 16" style={{display:"block"}}><path d="M2 5.5v5h3l4 3.5V2L5 5.5H2z" fill="currentColor"/>{muted?(<><line x1="11" y1="5" x2="15" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><line x1="15" y1="5" x2="11" y2="11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></>):(<path d="M11.5 5.5c1.1.9 1.8 2.2 1.8 3.5s-.7 2.6-1.8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>)}</svg>;}
+
+function Piece({kind,owner,x,y,r,selected,isSliding,colorblind}){
+  const{fill,stroke}=PC[owner];
+  let anim="none";if(isSliding)anim="slidePiece 0.28s ease-out both";else if(selected)anim="piecePulse 0.85s ease-in-out infinite";
+  const fs=Math.max(7,Math.round(r*0.4));
+  const triPts=`${x},${y-r*0.5} ${x-r*0.2},${y-r*0.26} ${x+r*0.2},${y-r*0.26}`;
+  return(<g style={{animation:anim,transformBox:"fill-box",transformOrigin:"center"}}>
+    <circle cx={x} cy={y} r={r} fill={fill} stroke={selected?"#fff":stroke} strokeWidth={selected?2.5:2} opacity={0.95}/>
+    {kind==="shroom"?(<><ellipse cx={x} cy={y-r*0.28} rx={r*0.62} ry={r*0.38} fill={stroke} opacity={0.82}/><rect x={x-r*0.2} y={y+r*0.08} width={r*0.4} height={r*0.5} rx={r*0.12} fill={stroke} opacity={0.6}/><ellipse cx={x} cy={y-r*0.28} rx={r*0.22} ry={r*0.12} fill="rgba(255,255,255,0.2)"/></>):(<><ellipse cx={x} cy={y+r*0.18} rx={r*0.62} ry={r*0.3} fill={stroke} opacity={0.66}/><line x1={x-r*0.18} y1={y-r*0.3} x2={x-r*0.38} y2={y-r*0.72} stroke={stroke} strokeWidth={1.5} strokeLinecap="round"/><line x1={x+r*0.18} y1={y-r*0.3} x2={x+r*0.38} y2={y-r*0.72} stroke={stroke} strokeWidth={1.5} strokeLinecap="round"/><circle cx={x-r*0.38} cy={y-r*0.72} r={r*0.13} fill={stroke}/><circle cx={x+r*0.38} cy={y-r*0.72} r={r*0.13} fill={stroke}/></>)}
+    {colorblind&&(<g><circle cx={x} cy={y} r={r*0.6} fill="rgba(0,0,0,0.48)"/>{owner==="green"?<polygon points={triPts} fill="rgba(255,255,255,0.92)"/>:<rect x={x-r*0.16} y={y-r*0.5} width={r*0.32} height={r*0.32} rx="1" fill="rgba(255,255,255,0.92)"/>}<text x={x} y={y+r*0.2} textAnchor="middle" dominantBaseline="middle" fontSize={fs} fill="rgba(255,255,255,0.95)" fontFamily="sans-serif" fontWeight="bold">{kind==="shroom"?"S":"Sl"}</text></g>)}
+  </g>);
+}
+
+function MiniPiece({kind,owner}){const{fill,stroke}=PC[owner];return <svg width="14" height="14" viewBox="0 0 14 14" style={{display:"inline-block",verticalAlign:"middle"}}><circle cx="7" cy="8.5" r="4.5" fill={fill} stroke={stroke} strokeWidth="1.5"/>{kind==="shroom"?<ellipse cx="7" cy="6.5" rx="4" ry="2.5" fill={stroke} opacity="0.85"/>:(<><line x1="5" y1="7" x2="3.5" y2="4.5" stroke={stroke} strokeWidth="1.3" strokeLinecap="round"/><line x1="9" y1="7" x2="10.5" y2="4.5" stroke={stroke} strokeWidth="1.3" strokeLinecap="round"/><circle cx="3.5" cy="4.5" r="1.2" fill={stroke}/><circle cx="10.5" cy="4.5" r="1.2" fill={stroke}/></>)}</svg>;}
+
+function MapThumb({mapKey}){
+  const map=MAPS[mapKey],S=46,sp=S/7,items=[];
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){if(!isValid(r,c))continue;items.push({r,c,blk:map.blocked.has(ck(r,c))});}
+  return <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} style={{display:"block",margin:"0 auto 6px"}}><rect x="0" y="0" width={S} height={S} rx="4" fill={map.bg}/>{items.map((item,i)=>{const x=item.c*sp+sp/2,y=item.r*sp+sp/2;if(item.blk)return <g key={i}><circle cx={x} cy={y} r={sp*0.3} fill={map.blockFill} stroke={map.blockStroke} strokeWidth="0.8"/><line x1={x-sp*0.16} y1={y-sp*0.16} x2={x+sp*0.16} y2={y+sp*0.16} stroke={map.blockStroke} strokeWidth="0.7"/><line x1={x+sp*0.16} y1={y-sp*0.16} x2={x-sp*0.16} y2={y+sp*0.16} stroke={map.blockStroke} strokeWidth="0.7"/></g>;const f=item.r===6?"#22c55e55":item.r===0?"#f9731655":isGDot(item.r,item.c)?map.slimeNode+"cc":map.mycNode+"cc";return <circle key={i} cx={x} cy={y} r={sp*0.2} fill={f}/>;})}</svg>;
+}
+
+function StatBar({val,total,color}){const w=total>0?Math.round(val/total*100):0;return <div style={{height:"5px",background:"var(--color-background-secondary)",borderRadius:"3px",overflow:"hidden",marginTop:"4px"}}><div style={{height:"100%",width:w+"%",background:color,borderRadius:"3px",transition:"width 0.4s ease"}}/></div>;}
+
+function StatsModal({stats,onReset,onClose,embedded}){
+  const aiG=stats.ai.w+stats.ai.l+stats.ai.d,p2G=stats.p2.g+stats.p2.o+stats.p2.d;
+  const aiAvg=aiG>0?Math.round(stats.ai.moves/aiG):0,p2Avg=p2G>0?Math.round(stats.p2.moves/p2G):0;
+  const[cr,setCr]=useState(false);
+  function row(label,val){return <div key={label} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"0.5px solid var(--color-border-tertiary)"}}><span style={{fontSize:"12px",color:"var(--color-text-secondary)"}}>{label}</span><span style={{fontSize:"13px",fontWeight:"500"}}>{val}</span></div>;}
+  const cols=[{label:"vs AI",games:aiG,a:{label:"Wins",v:stats.ai.w,c:"#22c55e"},b:{label:"Losses",v:stats.ai.l,c:"#f97316"},extras:[{label:"Win rate",v:pct(stats.ai.w,aiG)},{label:"Streak/Best",v:`${stats.ai.streak}/${stats.ai.best}`},{label:"Avg moves",v:aiAvg>0?aiAvg+"mv":"—"},{label:"Games",v:aiG}]},{label:"2 Player",games:p2G,a:{label:"Green",v:stats.p2.g,c:"#22c55e"},b:{label:"Orange",v:stats.p2.o,c:"#f97316"},extras:[{label:"Draws",v:stats.p2.d},{label:"Avg moves",v:p2Avg>0?p2Avg+"mv":"—"},{label:"Games",v:p2G}]}];
+  const wrapS=embedded?{}:{position:"absolute",inset:0,background:"rgba(0,0,0,0.76)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:50,padding:"14px",borderRadius:"var(--border-radius-lg)"};
+  const innerS={background:"var(--color-background-primary)",borderRadius:"var(--border-radius-lg)",border:"0.5px solid var(--color-border-tertiary)",padding:"18px",maxWidth:"320px",width:"100%",marginTop:embedded?"0":"8px",maxHeight:embedded?"none":"calc(100% - 28px)",overflowY:"auto"};
+  return <div style={wrapS}><div style={innerS}>
+    {!embedded&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}><span style={{fontSize:"16px",fontWeight:"500"}}>Stats</span><button onClick={onClose} style={{padding:"4px 12px",fontSize:"13px",fontWeight:"500"}}>Close</button></div>}
+    <div style={{display:"flex",gap:"10px",marginBottom:"14px"}}>
+      {cols.map(col=><div key={col.label} style={{flex:1,background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"10px",border:"0.5px solid var(--color-border-tertiary)"}}>
+        <div style={{fontSize:"12px",fontWeight:"500",color:"var(--color-text-secondary)",marginBottom:"8px"}}>{col.label}</div>
+        <div style={{display:"flex",gap:"8px",marginBottom:"8px"}}>{[col.a,col.b].map(s=><div key={s.label} style={{flex:1,textAlign:"center"}}><div style={{fontSize:"18px",fontWeight:"500",color:s.c}}>{s.v}</div><div style={{fontSize:"10px",color:"var(--color-text-secondary)"}}>{s.label}</div></div>)}</div>
+        <StatBar val={col.a.v} total={col.games} color={col.a.c}/>
+        <div style={{marginTop:"8px"}}>{col.extras.map(e=>row(e.label,e.v))}</div>
+      </div>)}
+    </div>
+    <div style={{marginBottom:"14px"}}><div style={{fontSize:"12px",fontWeight:"500",color:"var(--color-text-secondary)",marginBottom:"8px"}}>By map</div>
+      {Object.keys(MAPS).map(mk=>{const ms=stats.maps[mk]||{w:0,l:0,d:0},tot=ms.w+ms.l+ms.d;return <div key={mk} style={{marginBottom:"8px"}}><div style={{display:"flex",justifyContent:"space-between"}}><span style={{fontSize:"12px",fontWeight:"500"}}>{MAPS[mk].name}</span><span style={{fontSize:"11px",color:"var(--color-text-secondary)"}}>{ms.w}W·{ms.l}L·{pct(ms.w,tot)}</span></div><StatBar val={ms.w} total={tot} color="#22c55e"/></div>;})}
+    </div>
+    {!cr?<button onClick={()=>setCr(true)} style={{width:"100%",padding:"9px",fontSize:"12px",color:"var(--color-text-secondary)"}}>Reset stats</button>:<div style={{display:"flex",gap:"8px"}}><button onClick={()=>{onReset();setCr(false);if(onClose)onClose();}} style={{flex:1,padding:"9px",fontSize:"12px",color:"#ef4444",border:"0.5px solid #ef444444"}}>Confirm reset</button><button onClick={()=>setCr(false)} style={{flex:1,padding:"9px",fontSize:"12px",color:"var(--color-text-secondary)"}}>Cancel</button></div>}
+  </div></div>;
+}
+
+const RULES_DATA=[["Goal","Get one of your shrooms to the opponent's home row first."],["Shrooms","Move diagonally forward along tan paths. Can't go backward or eat pieces."],["Slugs","Move along the green grid any direction. Move onto an enemy to eat it."],["Turn","Move a piece OR place a reserve piece on your home row. No passing."],["Blocked","Rock cells (X) cannot be entered."],["Win","First shroom to reach the far home row wins!"]];
+function RulesModal({onClose}){return <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.76)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:50,padding:"14px",borderRadius:"var(--border-radius-lg)"}}><div style={{background:"var(--color-background-primary)",borderRadius:"var(--border-radius-lg)",border:"0.5px solid var(--color-border-tertiary)",padding:"20px",maxWidth:"300px",width:"100%",marginTop:"8px",maxHeight:"calc(100% - 28px)",overflowY:"auto"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}><span style={{fontSize:"16px",fontWeight:"500"}}>How to play</span><button onClick={onClose} style={{padding:"4px 12px",fontSize:"13px"}}>Close</button></div>{RULES_DATA.map(r=><div key={r[0]} style={{marginBottom:"12px"}}><div style={{fontSize:"13px",fontWeight:"500",marginBottom:"3px"}}>{r[0]}</div><div style={{fontSize:"12px",color:"var(--color-text-secondary)",lineHeight:"1.6"}}>{r[1]}</div></div>)}</div></div>;}
+
+function OnlineLobby({onBack,onGameReady,savedDbUrl,onSaveDbUrl}){
+  const[dbUrl,setDbUrl]=useState(savedDbUrl||"");
+  const[phase,setPhase]=useState("setup");
+  const[roomCode,setRoomCode]=useState("");
+  const[joinInput,setJoinInput]=useState("");
+  const[mapKey,setMapKey]=useState("classic");
+  const[error,setError]=useState("");
+  const[loading,setLoading]=useState(false);
+  const waitingEsRef=useRef(null);
+  function cleanUrl(u){return u.trim().replace(/\/$/,"");}
+
+  async function handleCreate(){
+    if(!dbUrl.trim()){setError("Please enter your Firebase Database URL");return;}
+    setLoading(true);setError("");
+    const code=generateCode(),url=cleanUrl(dbUrl);
+    const initState={pcs:INIT_PCS,res:{green:{...INIT_RES.green},orange:{...INIT_RES.orange}},turn:"green",lastMove:null,captured:{green:[],orange:[]},winner:null,moveCount:0,mapKey,players:{green:true,orange:false}};
+    try{
+      const r=await fetch(url+"/games/"+code+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(initState)});
+      if(!r.ok)throw new Error("Status "+r.status);
+      onSaveDbUrl(url);setRoomCode(code);setPhase("waiting");
+      const es=new EventSource(url+"/games/"+code+".json?accept=text/event-stream");
+      waitingEsRef.current=es;
+      es.addEventListener("put",e=>{try{const d=JSON.parse(e.data);const data=d&&d.data!==undefined?d.data:d;if(data&&data.players&&data.players.orange===true){es.close();waitingEsRef.current=null;onGameReady({dbUrl:url,roomCode:code,myColor:"green",initState:data});}}catch(err){}});
+      es.onerror=()=>{setError("Connection lost.");es.close();waitingEsRef.current=null;setPhase("setup");};
+    }catch(e){setError("Could not connect: "+e.message+". Check URL and Firebase rules (set .read/.write to true).");}
+    setLoading(false);
+  }
+
+  async function handleJoin(){
+    const code=joinInput.trim().toUpperCase();
+    if(!dbUrl.trim()){setError("Please enter your Firebase Database URL");return;}
+    if(!code||code.length!==4){setError("Enter a 4-character room code");return;}
+    setLoading(true);setError("");
+    const url=cleanUrl(dbUrl);
+    try{
+      const r=await fetch(url+"/games/"+code+".json");const data=await r.json();
+      if(!data){setError("Room not found.");setLoading(false);return;}
+      if(data.players&&data.players.orange===true){setError("Room is full.");setLoading(false);return;}
+      await fetch(url+"/games/"+code+"/players/orange.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:"true"});
+      onSaveDbUrl(url);
+      onGameReady({dbUrl:url,roomCode:code,myColor:"orange",initState:{...data,players:{green:true,orange:true}}});
+    }catch(e){setError("Could not join: "+e.message);}
+    setLoading(false);
+  }
+
+  useEffect(()=>()=>{if(waitingEsRef.current){waitingEsRef.current.close();waitingEsRef.current=null;}},[]);
+
+  if(phase==="waiting")return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"18px",padding:"2.5rem 1.5rem",minHeight:"380px",justifyContent:"center"}}>
+      <div style={{textAlign:"center"}}><div style={{fontSize:"16px",fontWeight:"500",marginBottom:"6px"}}>Waiting for opponent</div><div style={{fontSize:"13px",color:"var(--color-text-secondary)"}}>Share this code:</div></div>
+      <div style={{fontSize:"40px",fontWeight:"500",letterSpacing:"0.22em",background:"var(--color-background-secondary)",padding:"18px 32px",borderRadius:"var(--border-radius-lg)",border:"0.5px solid var(--color-border-secondary)"}}>{roomCode}</div>
+      <div style={{fontSize:"12px",color:"var(--color-text-secondary)",textAlign:"center",maxWidth:"260px",lineHeight:"1.65"}}>Friend goes to this same URL, clicks Online, pastes the Firebase URL, and enters this code to join as Orange.</div>
+      {error&&<div style={{fontSize:"12px",color:"#ef4444"}}>{error}</div>}
+      <button onClick={()=>{if(waitingEsRef.current){waitingEsRef.current.close();waitingEsRef.current=null;}onBack();}} style={{fontSize:"12px",padding:"8px 18px"}}>Cancel</button>
+    </div>
+  );
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"15px",padding:"1.6rem 1.2rem",minHeight:"480px",justifyContent:"center"}}>
+      <button onClick={onBack} style={{alignSelf:"flex-start",fontSize:"12px",padding:"5px 10px"}}>← Back</button>
+      <div style={{textAlign:"center"}}><div style={{fontSize:"18px",fontWeight:"500"}}>Online Multiplayer</div><div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginTop:"4px"}}>Play on two devices in real time</div></div>
+      <div style={{width:"100%",maxWidth:"300px"}}>
+        <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginBottom:"5px"}}>Firebase Database URL</div>
+        <input value={dbUrl} onChange={e=>{setDbUrl(e.target.value);setError("");}} placeholder="https://your-project-default-rtdb.firebaseio.com" style={{width:"100%",fontSize:"11px"}}/>
+      </div>
+      <div style={{width:"100%",maxWidth:"300px"}}>
+        <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginBottom:"7px"}}>Map (creator picks)</div>
+        <div style={{display:"flex",gap:"6px"}}>
+          {Object.keys(MAPS).map(mk=>{const m=MAPS[mk],sel=mapKey===mk;return <div key={mk} onClick={()=>setMapKey(mk)} style={{flex:1,padding:"8px 4px",borderRadius:"var(--border-radius-md)",cursor:"pointer",textAlign:"center",background:sel?m.bg:"var(--color-background-secondary)",border:"1px solid "+(sel?"#888":"var(--color-border-tertiary)"),transition:"all 0.15s"}}><MapThumb mapKey={mk}/><div style={{fontSize:"11px",fontWeight:sel?"500":"400",color:sel?"#fff":"var(--color-text-secondary)"}}>{m.name}</div></div>;})}
+        </div>
+      </div>
+      <div style={{width:"100%",maxWidth:"300px",display:"flex",gap:"8px",alignItems:"stretch"}}>
+        <button onClick={handleCreate} disabled={loading} style={{flex:1,padding:"13px",fontSize:"13px",fontWeight:"500",color:PC.green.stroke,border:"1px solid "+PC.green.stroke+"55",background:PC.green.stroke+"12"}}>{loading?"…":"Create Game"}</button>
+        <div style={{display:"flex",gap:"6px",flex:1}}>
+          <input value={joinInput} onChange={e=>{setJoinInput(e.target.value.toUpperCase().slice(0,4));setError("");}} placeholder="CODE" maxLength={4} style={{flex:1,fontSize:"15px",fontWeight:"500",letterSpacing:"0.15em",textAlign:"center",padding:"8px 4px",width:0}}/>
+          <button onClick={handleJoin} disabled={loading} style={{padding:"8px 12px",fontSize:"13px",fontWeight:"500",color:PC.orange.stroke,border:"1px solid "+PC.orange.stroke+"55",background:PC.orange.stroke+"12"}}>{loading?"…":"Join"}</button>
+        </div>
+      </div>
+      {error&&<div style={{fontSize:"12px",color:"#ef4444",textAlign:"center",maxWidth:"300px",lineHeight:"1.5"}}>{error}</div>}
+    </div>
+  );
+}
+
+function ModeSelect({onSelect,onOnline,stats,onShowStats,muted,onToggleMute}){
+  const[diff,setDiff]=useState("medium");const[timerOpt,setTimerOpt]=useState("none");const[mapKey,setMapKey]=useState("classic");
+  const aiG=stats.ai.w+stats.ai.l+stats.ai.d,p2G=stats.p2.g+stats.p2.o+stats.p2.d;
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"13px",padding:"1.5rem 1.2rem",minHeight:"540px",justifyContent:"center"}}>
+      <div style={{display:"flex",justifyContent:"flex-end",width:"100%",maxWidth:"290px",gap:"6px"}}>
+        <button onClick={onShowStats} style={{fontSize:"11px",padding:"5px 10px"}}>Stats</button>
+        <button onClick={onToggleMute} style={{padding:"6px 10px",display:"flex",alignItems:"center",gap:"5px",fontSize:"11px"}}><MuteIcon muted={muted}/>{muted?"Unmute":"Mute"}</button>
+      </div>
+      <div style={{textAlign:"center"}}>
+        <svg width="48" height="48" viewBox="0 0 52 52" style={{display:"block",margin:"0 auto 8px"}}><ellipse cx="26" cy="21" rx="22" ry="13" fill="#c8963c"/><ellipse cx="26" cy="21" rx="8.5" ry="5.2" fill="rgba(255,255,255,0.16)"/><rect x="20" y="30" width="12" height="15" rx="4" fill="#d4a870"/></svg>
+        <div style={{fontSize:"22px",fontWeight:"500"}}>Trailz</div>
+        <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginTop:"4px"}}>Get your shroom across — without being eaten.</div>
+      </div>
+      {(aiG>0||p2G>0)&&<div style={{display:"flex",gap:"14px",fontSize:"12px",background:"var(--color-background-secondary)",padding:"7px 14px",borderRadius:"var(--border-radius-md)",border:"0.5px solid var(--color-border-tertiary)"}}>
+        {aiG>0&&<span style={{color:"var(--color-text-secondary)"}}>vs AI: <span style={{color:"#22c55e"}}>{stats.ai.w}W</span>–<span style={{color:"#f97316"}}>{stats.ai.l}L</span> <span style={{opacity:0.6}}>({pct(stats.ai.w,aiG)})</span></span>}
+        {p2G>0&&<span style={{color:"var(--color-text-secondary)"}}>2P: <span style={{color:"#22c55e"}}>{stats.p2.g}G</span>–<span style={{color:"#f97316"}}>{stats.p2.o}O</span></span>}
+      </div>}
+      <div style={{display:"flex",gap:"8px",width:"100%",maxWidth:"290px"}}>
+        {[{m:"ai",lbl:"vs AI",sub:"Play bot"},{m:"2p",lbl:"2 Player",sub:"Hot-seat"},{m:"online",lbl:"Online",sub:"2 devices"}].map(opt=>(
+          <div key={opt.m} onClick={()=>opt.m==="online"?onOnline():onSelect(opt.m,diff,timerOpt,mapKey)} style={{flex:1,padding:"15px 8px",borderRadius:"var(--border-radius-lg)",cursor:"pointer",textAlign:"center",background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",transition:"all 0.2s"}} onMouseEnter={e=>e.currentTarget.style.borderColor="var(--color-border-primary)"} onMouseLeave={e=>e.currentTarget.style.borderColor="var(--color-border-tertiary)"}>
+            <div style={{fontSize:"14px",fontWeight:"500"}}>{opt.lbl}</div>
+            <div style={{fontSize:"11px",color:"var(--color-text-secondary)",marginTop:"3px"}}>{opt.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{width:"100%",maxWidth:"290px"}}>
+        <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginBottom:"7px",textAlign:"center"}}>Map</div>
+        <div style={{display:"flex",gap:"7px"}}>
+          {Object.keys(MAPS).map(mk=>{const map=MAPS[mk],sel=mapKey===mk;return <div key={mk} onClick={()=>setMapKey(mk)} style={{flex:1,padding:"9px 5px",borderRadius:"var(--border-radius-md)",cursor:"pointer",textAlign:"center",background:sel?map.bg:"var(--color-background-secondary)",border:"1px solid "+(sel?"#888":"var(--color-border-tertiary)"),transition:"all 0.15s"}}><MapThumb mapKey={mk}/><div style={{fontSize:"11px",fontWeight:sel?"500":"400",color:sel?"#fff":"var(--color-text-secondary)"}}>{map.name}</div><div style={{fontSize:"10px",color:"var(--color-text-secondary)",marginTop:"2px",lineHeight:"1.3"}}>{map.desc}</div></div>;})}
+        </div>
+      </div>
+      <div style={{width:"100%",maxWidth:"290px",display:"flex",gap:"14px"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginBottom:"7px",textAlign:"center"}}>Difficulty</div>
+          <div style={{display:"flex",gap:"4px",justifyContent:"center"}}>
+            {["easy","medium","hard"].map(d=><button key={d} onClick={()=>setDiff(d)} style={{padding:"6px 8px",fontSize:"11px",background:diff===d?"rgba(56,189,248,0.12)":"transparent",border:"1px solid "+(diff===d?"#38bdf8":"var(--color-border-tertiary)"),color:diff===d?"#38bdf8":"var(--color-text-secondary)",fontWeight:diff===d?"500":"400"}}>{d[0].toUpperCase()+d.slice(1)}</button>)}
+          </div>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:"12px",color:"var(--color-text-secondary)",marginBottom:"7px",textAlign:"center"}}>Timer</div>
+          <div style={{display:"flex",gap:"4px",justifyContent:"center"}}>
+            {[{v:"none",lbl:"Off"},{v:"5",lbl:"5m"},{v:"10",lbl:"10m"}].map(t=><button key={t.v} onClick={()=>setTimerOpt(t.v)} style={{padding:"6px 8px",fontSize:"11px",background:timerOpt===t.v?"rgba(251,191,36,0.12)":"transparent",border:"1px solid "+(timerOpt===t.v?"#fbbf24":"var(--color-border-tertiary)"),color:timerOpt===t.v?"#fbbf24":"var(--color-text-secondary)",fontWeight:timerOpt===t.v?"500":"400"}}>{t.lbl}</button>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Trailz(){
+  const[mode,setMode]=useState(null);const[diff,setDiff]=useState("medium");const[timerOpt,setTimerOpt]=useState("none");const[mapKey,setMapKey]=useState("classic");
+  const[pcs,setPcs]=useState({...INIT_PCS});const[res,setRes]=useState({green:{...INIT_RES.green},orange:{...INIT_RES.orange}});
+  const[turn,setTurn]=useState("green");const[sel,setSel]=useState(null);const[hi,setHi]=useState([]);const[hov,setHov]=useState(null);const[placing,setPlacing]=useState(null);
+  const[aiOn,setAiOn]=useState(false);const[winner,setWinner]=useState(null);const[log,setLog]=useState([]);const[lastMove,setLastMove]=useState(null);
+  const[captured,setCaptured]=useState({green:[],orange:[]});const[undoStack,setUndoStack]=useState([]);
+  const[slideKey,setSlideKey]=useState(null);const[slideKF,setSlideKF]=useState("");const[capFlash,setCapFlash]=useState(null);
+  const[showRules,setShowRules]=useState(false);const[showStats,setShowStats]=useState(false);const[showOnlineLobby,setShowOnlineLobby]=useState(false);
+  const[timers,setTimers]=useState(null);const[moveCount,setMoveCount]=useState(0);
+  const[muted,setMutedState]=useState(false);const[colorblind,setColorblind]=useState(false);const[copied,setCopied]=useState(false);
+  const[onlineConfig,setOnlineConfig]=useState(null);const[savedDbUrl,setSavedDbUrl]=useState(()=>localStorage.getItem("trailz:dburl")||"");const[onlineStatus,setOnlineStatus]=useState("");
+  const mutedRef=useRef(false),bsRef=useRef(null),stateRef=useRef({}),esRef=useRef(null),writtenMoveCountRef=useRef(0),onlineConfigRef=useRef(null);
+  const bs=useBoardSize();bsRef.current=bs;
+  const[stats,saveStats,resetStats]=useStats();
+  const sound=useSound(mutedRef),ambient=useAmbientMusic(mutedRef);
+  stateRef.current={mode,stats,mapKey,timers,winner,moveCount,onlineConfig,captured};
+  onlineConfigRef.current=onlineConfig;
+  const{cell,pad,bw,bh}=bs;
+  const px=c=>pad+c*cell,py=r=>pad+r*cell;
+  const pieceR=Math.max(13,Math.floor(cell*0.33)),nodeRb=Math.max(8,Math.floor(cell*0.19)),nodeRs=Math.max(5,Math.floor(cell*0.13)),tapR=Math.max(20,Math.floor(cell*0.42));
+
+  function toggleMute(){const next=!mutedRef.current;mutedRef.current=next;setMutedState(next);ambient.setMuted(next);}
+  function handleShare(){const mn=MAPS[mapKey].name;let text=winner==="draw"?`Trailz: Draw on ${mn} in ${moveCount} moves!`:mode==="ai"?(winner==="green"?"Beat":"Lost to")+` Trailz AI (${diff}) on ${mn} in ${moveCount} moves!`:`Trailz: ${winner==="green"?"Green":"Orange"} wins on ${mn} in ${moveCount} moves!`;try{navigator.clipboard.writeText(text);setCopied(true);setTimeout(()=>setCopied(false),2000);}catch(e){}}
+  function stopListening(){if(esRef.current){esRef.current.close();esRef.current=null;}}
+
+  const applyRemoteState=useCallback(data=>{
+    if(data.lastMove&&data.lastMove.fromK){const bsN=bsRef.current,fp=pk(data.lastMove.fromK),tp=pk(data.lastMove.toK);const dx=(bsN.pad+fp[1]*bsN.cell)-(bsN.pad+tp[1]*bsN.cell),dy=(bsN.pad+fp[0]*bsN.cell)-(bsN.pad+tp[0]*bsN.cell);if(dx||dy){setSlideKF(`@keyframes slidePiece{from{transform:translate(${dx}px,${dy}px)}to{transform:translate(0,0)}}`);setSlideKey(data.lastMove.toK);setTimeout(()=>setSlideKey(k=>k===data.lastMove.toK?null:k),320);}}
+    if(data.lastMove&&data.lastMove.ate){const tp=pk(data.lastMove.toK),bsN=bsRef.current;setCapFlash({x:bsN.pad+tp[1]*bsN.cell,y:bsN.pad+tp[0]*bsN.cell,t:Date.now()});setTimeout(()=>setCapFlash(null),600);}
+    if(data.lastMove)sound(data.lastMove.ate?"capture":data.lastMove.fromK?"move":"place",data.lastMove.player);
+    if(data.pcs)setPcs({...data.pcs});if(data.res)setRes({green:{...data.res.green},orange:{...data.res.orange}});if(data.turn)setTurn(data.turn);if(data.lastMove!==undefined)setLastMove(data.lastMove);if(data.captured)setCaptured({green:[...data.captured.green],orange:[...data.captured.orange]});if(typeof data.moveCount==="number")setMoveCount(data.moveCount);
+    if(data.winner){setWinner(data.winner);if(data.winner!=="draw")sound("win",data.winner);}
+    if(data.lastMove){const who=data.lastMove.player==="green"?"Green":"Orange";setLog(prev=>[who+" moved",...prev].slice(0,5));}
+  },[sound]);
+
+  function startListening(dbUrl,code){
+    stopListening();
+    try{const es=new EventSource(dbUrl+"/games/"+code+".json?accept=text/event-stream");es.addEventListener("put",e=>{try{const d=JSON.parse(e.data);const data=d&&d.data!==undefined?d.data:d;if(!data||typeof data!=="object")return;if(data.players&&data.players.orange&&data.players.green)setOnlineStatus("");if(typeof data.moveCount==="number"&&data.moveCount>writtenMoveCountRef.current)applyRemoteState(data);}catch(err){}});es.onerror=()=>setOnlineStatus("Connection issue…");esRef.current=es;}catch(e){setOnlineStatus("Could not connect.");}
+  }
+
+  function writeToFirebase(state){const cfg=onlineConfigRef.current;if(!cfg)return;writtenMoveCountRef.current=state.moveCount;fetch(cfg.dbUrl+"/games/"+cfg.roomCode+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(state)}).catch(()=>setOnlineStatus("Write failed."));}
+
+  function handleGameReady(cfg){
+    setOnlineConfig(cfg);setMapKey(cfg.initState.mapKey||"classic");setMode("online");setShowOnlineLobby(false);
+    const s=cfg.initState;setPcs({...s.pcs});setRes({green:{...s.res.green},orange:{...s.res.orange}});setTurn(s.turn||"green");setLastMove(s.lastMove||null);setCaptured({green:[...(s.captured?.green||[])],orange:[...(s.captured?.orange||[])]});setWinner(s.winner||null);setMoveCount(s.moveCount||0);writtenMoveCountRef.current=s.moveCount||0;
+    if(cfg.myColor==="green"&&(!s.players||!s.players.orange))setOnlineStatus("Waiting for opponent…");
+    ambient.start();startListening(cfg.dbUrl,cfg.roomCode);
+  }
+
+  useEffect(()=>{if(!timers||winner||!mode||aiOn)return;if(mode==="online"&&onlineConfig&&turn!==onlineConfig.myColor)return;const id=setInterval(()=>setTimers(p=>p?{...p,[turn]:Math.max(0,p[turn]-1)}:p),1000);return()=>clearInterval(id);},[timers,winner,turn,aiOn,mode,onlineConfig]);
+  useEffect(()=>{const t=stateRef.current.timers,w=stateRef.current.winner;if(!t||w)return;if(t.green===0)bumpRec("orange");if(t.orange===0)bumpRec("green");},[timers]);
+  useEffect(()=>()=>stopListening(),[]);
+
+  function bumpRec(w){
+    const{mode:m,stats:s,mapKey:mk,moveCount:mc}=stateRef.current;setWinner(w);if(w!=="draw")sound("win",w);if(m==="online")return;
+    const ns=JSON.parse(JSON.stringify(s));if(!ns.maps[mk])ns.maps[mk]={w:0,l:0,d:0};
+    if(m==="ai"){const won=w==="green";if(won){ns.ai.w++;ns.ai.streak++;ns.ai.best=Math.max(ns.ai.best,ns.ai.streak);}else if(w==="orange"){ns.ai.l++;ns.ai.streak=0;}else{ns.ai.d++;ns.ai.streak=0;}ns.ai.moves+=mc;if(w!=="draw")ns.maps[mk][won?"w":"l"]++;else ns.maps[mk].d++;}
+    else{if(w==="green"){ns.p2.g++;ns.maps[mk].w++;}else if(w==="orange"){ns.p2.o++;ns.maps[mk].l++;}else{ns.p2.d++;ns.maps[mk].d++;}ns.p2.moves+=mc;}
+    saveStats(ns);
+  }
+
+  function addLog(msg){setLog(p=>[msg,...p].slice(0,5));}
+  function startSlide(fromK,toK){const bsN=bsRef.current,fp=pk(fromK),tp=pk(toK);const dx=(bsN.pad+fp[1]*bsN.cell)-(bsN.pad+tp[1]*bsN.cell),dy=(bsN.pad+fp[0]*bsN.cell)-(bsN.pad+tp[0]*bsN.cell);if(dx||dy){setSlideKF(`@keyframes slidePiece{from{transform:translate(${dx}px,${dy}px)}to{transform:translate(0,0)}}`);setSlideKey(toK);setTimeout(()=>setSlideKey(k=>k===toK?null:k),320);}}
+  function snap(cP,cR,cC,cT,cL,cTi){setUndoStack(s=>[...s,{pcs:{...cP},res:{green:{...cR.green},orange:{...cR.orange}},turn:cT,lastMove:cL,captured:{green:[...cC.green],orange:[...cC.orange]},timers:cTi?{...cTi}:null,moveCount}].slice(-20));}
+  function doUndo(){if(!undoStack.length||winner||mode==="online")return;const prev=undoStack[undoStack.length-1];setUndoStack(s=>s.slice(0,-1));setPcs({...prev.pcs});setRes({green:{...prev.res.green},orange:{...prev.res.orange}});setCaptured({green:[...prev.captured.green],orange:[...prev.captured.orange]});setTurn(prev.turn);setLastMove(prev.lastMove);setMoveCount(prev.moveCount);if(prev.timers)setTimers({...prev.timers});setSel(null);setHi([]);setPlacing(null);setHov(null);setAiOn(false);setSlideKey(null);}
+  function initTimers(opt){if(opt==="none"){setTimers(null);return;}setTimers({green:parseInt(opt)*60,orange:parseInt(opt)*60});}
+  function reset(keepMode,opts){
+    setPcs({...INIT_PCS});setRes({green:{...INIT_RES.green},orange:{...INIT_RES.orange}});setTurn("green");setSel(null);setHi([]);setHov(null);setPlacing(null);setAiOn(false);setWinner(null);setLog([]);setLastMove(null);setCaptured({green:[],orange:[]});setUndoStack([]);setSlideKey(null);setSlideKF("");setMoveCount(0);
+    if(!keepMode){setMode(null);setShowRules(false);setTimers(null);setOnlineConfig(null);setOnlineStatus("");stopListening();ambient.stop();}
+    else{const ut=opts?.timerOpt!==undefined?opts.timerOpt:timerOpt;const um=opts?.mapKey!==undefined?opts.mapKey:mapKey;setMapKey(um);initTimers(ut);}
+  }
+
+  function finishTurn(np,nr,nc,nextPlayer,bl,lm,mc){
+    const w=checkWin(np),nm=!w?getAllMoves(np,nr,nextPlayer,bl):[];const nw=w?w:(nm.length===0?"draw":null);
+    setPcs(np);setRes(nr);setCaptured(nc);setSel(null);setHi([]);setPlacing(null);setHov(null);if(lm!==undefined)setLastMove(lm);if(mc!==undefined)setMoveCount(mc);
+    if(nw){bumpRec(nw);return nw;}else{setTurn(nextPlayer);return null;}
+  }
+
+  const doAI=useCallback(async(curPcs,curRes,curCap,difficulty,curMapKey)=>{
+    setAiOn(true);const bl=MAPS[curMapKey].blocked,moves=getAllMoves(curPcs,curRes,"orange",bl);
+    if(!moves.length){setAiOn(false);bumpRec("draw");return;}
+    // Hard falls back to Medium in standalone version (no API key)
+    const chosen=moves.reduce((b,m)=>scoreMove(m,"orange")>scoreMove(b,"orange")?m:b,moves[0]);
+    const np={...curPcs},nr={green:{...curRes.green},orange:{...curRes.orange}},nc={green:[...curCap.green],orange:[...curCap.orange]};
+    let hasEat=false,ate=null;
+    if(chosen.type==="move"){if(chosen.eaten){nr[chosen.eaten.owner][chosen.eaten.kind+"s"]++;nc.orange.push(chosen.eaten.kind);hasEat=true;ate={kind:chosen.eaten.kind};}const bsN=bsRef.current,fp=pk(chosen.fromK),tp=pk(chosen.toK);const dx=(bsN.pad+fp[1]*bsN.cell)-(bsN.pad+tp[1]*bsN.cell),dy=(bsN.pad+fp[0]*bsN.cell)-(bsN.pad+tp[0]*bsN.cell);if(dx||dy){setSlideKF(`@keyframes slidePiece{from{transform:translate(${dx}px,${dy}px)}to{transform:translate(0,0)}}`);setSlideKey(chosen.toK);setTimeout(()=>setSlideKey(k=>k===chosen.toK?null:k),320);}if(hasEat){const tx=bsN.pad+tp[1]*bsN.cell,ty=bsN.pad+tp[0]*bsN.cell;setCapFlash({x:tx,y:ty,t:Date.now()});setTimeout(()=>setCapFlash(null),600);}np[chosen.toK]=np[chosen.fromK];delete np[chosen.fromK];}
+    else{np[chosen.toK]={kind:chosen.kind,owner:"orange"};nr.orange[chosen.kind+"s"]--;}
+    const lm={fromK:chosen.fromK||null,toK:chosen.toK,player:"orange",ate};const newMC=moveCount+1;
+    const desc="AI "+(chosen.type==="move"?"moves "+chosen.piece.kind+(hasEat?", eats "+chosen.eaten.kind:""):"places "+chosen.kind);
+    sound(hasEat?"capture":chosen.type==="place"?"place":"move","orange");addLog(desc);setAiOn(false);
+    finishTurn(np,nr,nc,"green",bl,lm,newMC);
+  },[sound,moveCount]);
+
+  useEffect(()=>{if(mode==="ai"&&turn==="orange"&&!winner&&!aiOn){const t=setTimeout(()=>doAI(pcs,res,captured,diff,mapKey),750);return()=>clearTimeout(t);}},[mode,turn,winner,aiOn,pcs,res,captured,diff,doAI,mapKey]);
+
+  function commit(np,nr,nc,fromK,toK,curTurn,piece,eaten){
+    const bl=MAPS[mapKey].blocked,hasEat=!!eaten,ate=eaten?{kind:eaten.kind}:null;
+    if(hasEat){const tp=pk(toK);setCapFlash({x:px(tp[1]),y:py(tp[0]),t:Date.now()});setTimeout(()=>setCapFlash(null),600);}
+    if(fromK)startSlide(fromK,toK);
+    sound(hasEat?"capture":fromK?"move":"place",curTurn);
+    const who=(mode==="ai"&&curTurn==="green")||(mode==="online"&&onlineConfig&&curTurn===onlineConfig.myColor)?"You":curTurn[0].toUpperCase()+curTurn.slice(1);
+    addLog(fromK?`${who} move ${piece.kind}${hasEat?", eat "+eaten.kind:""}`:`${who} place ${piece.kind}`);
+    const lm={fromK:fromK||null,toK,player:curTurn,ate},newMC=moveCount+1,nextPlayer=curTurn==="green"?"orange":"green";
+    const nw=finishTurn(np,nr,nc,nextPlayer,bl,lm,newMC);
+    if(mode==="online"&&onlineConfig)writeToFirebase({pcs:np,res:nr,captured:nc,turn:nw?curTurn:nextPlayer,lastMove:lm,winner:nw||null,moveCount:newMC,mapKey,players:{green:true,orange:true}});
+  }
+
+  function clickNode(r,c){
+    if(winner||showRules||showStats)return;if(mode==="ai"&&(turn==="orange"||aiOn))return;if(mode==="online"&&onlineConfig&&turn!==onlineConfig.myColor)return;
+    const k=ck(r,c),bl=MAPS[mapKey].blocked;if(bl.has(k))return;
+    if(placing){if(hi.some(d=>d[0]===r&&d[1]===c)){snap(pcs,res,captured,turn,lastMove,timers);const np={...pcs,[k]:{kind:placing,owner:turn}},nr={green:{...res.green},orange:{...res.orange}};nr[turn][placing+"s"]--;commit(np,nr,{green:[...captured.green],orange:[...captured.orange]},null,k,turn,{kind:placing},null);}return;}
+    if(sel&&hi.some(d=>d[0]===r&&d[1]===c)){snap(pcs,res,captured,turn,lastMove,timers);const sk=ck(sel.r,sel.c),piece=pcs[sk],eaten=pcs[k]||null,np={...pcs,[k]:piece};delete np[sk];const nr={green:{...res.green},orange:{...res.orange}},nc={green:[...captured.green],orange:[...captured.orange]};if(eaten){nr[eaten.owner][eaten.kind+"s"]++;nc[turn].push(eaten.kind);}commit(np,nr,nc,sk,k,turn,piece,eaten);return;}
+    const piece=pcs[k];if(piece&&piece.owner===turn){const pos=pk(k),dests=piece.kind==="shroom"?shroomMoves(pos[0],pos[1],turn,pcs,MAPS[mapKey].blocked):slugMoves(pos[0],pos[1],turn,pcs,MAPS[mapKey].blocked);setSel({r,c});setHi(dests);setPlacing(null);setHov(null);return;}
+    setSel(null);setHi([]);
+  }
+
+  function startPlace(kind){if(winner||showRules||showStats)return;if(mode==="ai"&&(turn==="orange"||aiOn))return;if(mode==="online"&&onlineConfig&&turn!==onlineConfig.myColor)return;if(res[turn][kind+"s"]<=0)return;setSel(null);setPlacing(kind);setHi(homeDests(turn,pcs,MAPS[mapKey].blocked));setHov(null);}
+  function handleHover(r,c,on){if(!on){setHov(null);return;}if(winner||sel||placing||aiOn)return;if(mode==="online"&&onlineConfig&&turn!==onlineConfig.myColor)return;const k=ck(r,c),p=pcs[k];if(p&&p.owner===turn)setHov(k);}
+
+  if(!mode&&!showOnlineLobby){
+    if(showStats)return <div style={{padding:"16px",maxWidth:"360px",margin:"0 auto"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}><span style={{fontSize:"16px",fontWeight:"500"}}>Stats</span><button onClick={()=>setShowStats(false)} style={{padding:"6px 14px",fontSize:"13px",fontWeight:"500"}}>Close</button></div><StatsModal stats={stats} onReset={()=>resetStats()} onClose={()=>setShowStats(false)} embedded={true}/></div>;
+    return <ModeSelect stats={stats} muted={muted} onToggleMute={toggleMute} onShowStats={()=>setShowStats(true)} onOnline={()=>setShowOnlineLobby(true)} onSelect={(m,d,t,mk)=>{setMode(m);setDiff(d);setTimerOpt(t);setMapKey(mk);reset(true,{timerOpt:t,mapKey:mk});ambient.start();}}/>;
+  }
+  if(!mode&&showOnlineLobby)return <OnlineLobby onBack={()=>setShowOnlineLobby(false)} onGameReady={handleGameReady} savedDbUrl={savedDbUrl} onSaveDbUrl={u=>{setSavedDbUrl(u);localStorage.setItem("trailz:dburl",u);}}/>;
+
+  const map=MAPS[mapKey],bl=map.blocked,isMyTurn=mode==="online"?(onlineConfig&&turn===onlineConfig.myColor):true;
+  const canAct=!winner&&!showRules&&!showStats&&isMyTurn&&(mode==="ai"?!aiOn:true),ts=PC[turn].stroke;
+  let hovHi=[];if(hov&&!sel&&!placing){const hp=pk(hov),p=pcs[hov];if(p)hovHi=p.kind==="shroom"?shroomMoves(hp[0],hp[1],turn,pcs,bl):slugMoves(hp[0],hp[1],turn,pcs,bl);}
+
+  const mycLines=[],slLines=[];
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){if(!isOnMap(r,c,bl))continue;if(isOnMap(r+1,c+1,bl))mycLines.push([r,c,r+1,c+1]);if(isOnMap(r+1,c-1,bl))mycLines.push([r,c,r+1,c-1]);}
+  for(let r=0;r<ROWS;r+=2)for(let c=0;c<COLS;c+=2){if(!isGDot(r,c)||bl.has(ck(r,c)))continue;if(isGDot(r,c+2)&&!bl.has(ck(r,c+2)))slLines.push([r,c,r,c+2]);if(isGDot(r+2,c)&&!bl.has(ck(r+2,c)))slLines.push([r,c,r+2,c]);}
+
+  const nodeEls=[],tapEls=[];
+  for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){if(!isValid(r,c))continue;const k=ck(r,c);if(bl.has(k)){const s=nodeRb*0.85;nodeEls.push(<g key={"blk"+k}><circle cx={px(c)} cy={py(r)} r={nodeRb+2} fill={map.blockFill} stroke={map.blockStroke} strokeWidth={1.5}/><line x1={px(c)-s} y1={py(r)-s} x2={px(c)+s} y2={py(r)+s} stroke={map.blockStroke} strokeWidth={1.5}/><line x1={px(c)+s} y1={py(r)-s} x2={px(c)-s} y2={py(r)+s} stroke={map.blockStroke} strokeWidth={1.5}/></g>);}else{const big=isGDot(r,c);nodeEls.push(<circle key={k} cx={px(c)} cy={py(r)} r={big?nodeRb:nodeRs} fill={big?map.slimeNode:map.mycNode} stroke={big?map.slimeStroke:map.mycStroke} strokeWidth={1.2}/>);tapEls.push(<circle key={"t"+k} cx={px(c)} cy={py(r)} r={tapR} fill="transparent" onClick={()=>clickNode(r,c)} onMouseEnter={()=>handleHover(r,c,true)} onMouseLeave={()=>handleHover(r,c,false)} style={{cursor:"pointer"}}/>);}}
+  const pieceEls=Object.entries(pcs).map(([k,p])=>{if(!p)return null;const pos=pk(k);return <Piece key={k} kind={p.kind} owner={p.owner} x={px(pos[1])} y={py(pos[0])} r={pieceR} selected={sel!==null&&sel.r===pos[0]&&sel.c===pos[1]} isSliding={slideKey===k} colorblind={colorblind}/>;});
+
+  const isDraw=winner==="draw";
+  const winMsg=isDraw?"Draw!":winner==="green"?(mode==="ai"||(mode==="online"&&onlineConfig?.myColor==="green")?"You win!":"Green wins!"):(mode==="ai"?"AI wins!":mode==="online"?"Opponent wins!":"Orange wins!");
+  const winColor=isDraw?"#a78bfa":winner==="green"?"#4ade80":"#f97316";
+  const winBg=isDraw?"#120a25":winner==="green"?"#082515":"#351400";
+  const winStroke=isDraw?"#7c3aed":winner==="green"?"#22c55e":"#f97316";
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"8px",padding:"12px 10px",position:"relative",userSelect:"none",width:"100%"}}>
+      <style>{`@keyframes piecePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}@keyframes dotPulse{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}@keyframes capRing{0%{transform:scale(0.4);opacity:0.9}100%{transform:scale(2.6);opacity:0}}${slideKF}`}</style>
+      {showRules&&<RulesModal onClose={()=>setShowRules(false)}/>}
+      {showStats&&<StatsModal stats={stats} onReset={()=>resetStats()} onClose={()=>setShowStats(false)}/>}
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",maxWidth:bw+"px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"7px"}}>
+          <svg width="20" height="20" viewBox="0 0 20 20"><ellipse cx="10" cy="8" rx="9" ry="5.5" fill="#c8963c"/><rect x="7" y="11.5" width="6" height="7" rx="2" fill="#d4a870"/></svg>
+          <span style={{fontSize:"15px",fontWeight:"500"}}>Trailz</span>
+          <span style={{fontSize:"11px",color:"var(--color-text-secondary)",background:"var(--color-background-secondary)",padding:"2px 7px",borderRadius:"var(--border-radius-md)",border:"0.5px solid var(--color-border-tertiary)"}}>{mode==="online"?"Online":mode==="ai"?"vs AI · "+diff:"2P"} · {map.name}{timerOpt!=="none"?" · "+timerOpt+"m":""}</span>
+          {mode==="online"&&onlineConfig&&<span style={{fontSize:"11px",color:PC[onlineConfig.myColor].stroke,background:PC[onlineConfig.myColor].stroke+"15",padding:"2px 7px",borderRadius:"var(--border-radius-md)"}}>{`You = ${onlineConfig.myColor}`}</span>}
+        </div>
+        <div style={{display:"flex",gap:"4px",alignItems:"center"}}>
+          <button onClick={toggleMute} style={{padding:"5px 7px",display:"flex",alignItems:"center"}}><MuteIcon muted={muted}/></button>
+          <button onClick={()=>setColorblind(c=>!c)} style={{fontSize:"11px",padding:"5px 7px",color:colorblind?"#38bdf8":"var(--color-text-secondary)",background:colorblind?"rgba(56,189,248,0.1)":"transparent",border:colorblind?"1px solid #38bdf855":"1px solid transparent",fontWeight:colorblind?"500":"400"}}>CB</button>
+          {mode!=="online"&&undoStack.length>0&&!aiOn&&!winner&&<button onClick={doUndo} style={{fontSize:"11px",padding:"5px 8px"}}>Undo</button>}
+          {[["Rules",()=>setShowRules(true)],["Stats",()=>setShowStats(true)],["Reset",()=>reset(true)],["Menu",()=>reset(false)]].map(btn=><button key={btn[0]} onClick={btn[1]} style={{fontSize:"11px",padding:"5px 8px"}}>{btn[0]}</button>)}
+        </div>
+      </div>
+
+      {mode==="online"&&onlineStatus&&<div style={{fontSize:"12px",color:"var(--color-text-secondary)",background:"var(--color-background-secondary)",padding:"6px 14px",borderRadius:"var(--border-radius-md)",border:"0.5px solid var(--color-border-tertiary)",display:"flex",alignItems:"center",gap:"8px"}}><span style={{width:"7px",height:"7px",borderRadius:"50%",background:"#fbbf24",display:"inline-block",animation:"dotPulse 1.5s ease-in-out 0s infinite"}}/>{onlineStatus}</div>}
+
+      <div style={{display:"flex",gap:"8px",width:"100%",maxWidth:bw+"px"}}>
+        {["green","orange"].map(pl=>{
+          const active=turn===pl&&!winner,stroke=PC[pl].stroke,tLeft=timers?timers[pl]:null,lowTime=tLeft!==null&&tLeft<=30,isMe=mode==="online"&&onlineConfig&&pl===onlineConfig.myColor;
+          let label;
+          if(pl==="orange"&&mode==="ai")label=aiOn?<span style={{display:"inline-flex",alignItems:"center"}}>AI<ThinkingDots/></span>:"AI (Orange)";
+          else if(pl==="green"&&mode==="ai")label="You (Green)";
+          else if(mode==="online")label=pl[0].toUpperCase()+pl.slice(1)+(isMe?" (you)":"");
+          else label=pl[0].toUpperCase()+pl.slice(1);
+          return <div key={pl} style={{flex:1,display:"flex",alignItems:"center",gap:"6px",padding:"6px 10px",borderRadius:"var(--border-radius-md)",fontSize:"12px",transition:"all 0.2s",background:active?stroke+"14":"var(--color-background-secondary)",border:"1px solid "+(active?stroke:"var(--color-border-tertiary)"),color:active?stroke:"var(--color-text-secondary)",fontWeight:active?"500":"400"}}>
+            <svg width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill={active?stroke:"var(--color-border-secondary)"}/></svg>
+            <span style={{flex:1}}>{label}</span>
+            {tLeft!==null&&<span style={{fontSize:"13px",fontWeight:"500",color:lowTime?(active?"#ef4444":"#ef444466"):(active?stroke:"var(--color-text-secondary)")}}>{fmt(tLeft)}</span>}
+          </div>;
+        })}
+      </div>
+
+      <div style={{position:"relative",display:"inline-block"}}>
+        <svg width={bw} height={bh} style={{background:map.bg,borderRadius:"var(--border-radius-lg)",border:"0.5px solid rgba(90,50,10,0.4)",display:"block",touchAction:"manipulation"}}>
+          {Array.from({length:ROWS},(_,r)=><text key={"rl"+r} x={9} y={py(r)+3} textAnchor="middle" fontSize={7} fill="rgba(255,255,255,0.22)" fontFamily="sans-serif">{r}</text>)}
+          {Array.from({length:COLS},(_,c)=><text key={"cl"+c} x={px(c)} y={13} textAnchor="middle" fontSize={7} fill="rgba(255,255,255,0.22)" fontFamily="sans-serif">{c}</text>)}
+          <text x={bw-8} y={py(0)+3} textAnchor="end" fontSize={7} fill="#f97316" opacity={0.3} fontFamily="sans-serif">{mode==="ai"?"AI home":"orange"}</text>
+          <text x={bw-8} y={py(6)+3} textAnchor="end" fontSize={7} fill="#22c55e" opacity={0.3} fontFamily="sans-serif">{mode==="ai"||mode==="online"?"your home":"green"}</text>
+          {slLines.map((s,i)=><line key={"sl"+i} x1={px(s[1])} y1={py(s[0])} x2={px(s[3])} y2={py(s[2])} stroke={map.slime} strokeWidth={Math.max(4,Math.floor(cell*0.085))} strokeLinecap="round"/>)}
+          {mycLines.map((m,i)=><line key={"my"+i} x1={px(m[1])} y1={py(m[0])} x2={px(m[3])} y2={py(m[2])} stroke={map.myc} strokeWidth={Math.max(3,Math.floor(cell*0.065))} strokeLinecap="round"/>)}
+          {lastMove&&lastMove.fromK&&(()=>{const fp=pk(lastMove.fromK),tp=pk(lastMove.toK);return <><circle cx={px(fp[1])} cy={py(fp[0])} r={pieceR+6} fill="rgba(255,210,0,0.07)" stroke="rgba(255,210,0,0.35)" strokeWidth={1.5}/><circle cx={px(tp[1])} cy={py(tp[0])} r={pieceR+6} fill="rgba(255,210,0,0.13)" stroke="rgba(255,210,0,0.6)" strokeWidth={2}/>;</>;})()}
+          {lastMove&&!lastMove.fromK&&(()=>{const tp=pk(lastMove.toK);return <circle cx={px(tp[1])} cy={py(tp[0])} r={pieceR+6} fill="rgba(255,210,0,0.13)" stroke="rgba(255,210,0,0.6)" strokeWidth={2}/>;})()}
+          {hovHi.map((d,i)=><circle key={"hv"+i} cx={px(d[1])} cy={py(d[0])} r={pieceR+5} fill={ts+"0a"} stroke={ts+"44"} strokeWidth={1} strokeDasharray="3 3"/>)}
+          {hi.map((d,i)=><circle key={"h"+i} cx={px(d[1])} cy={py(d[0])} r={pieceR+7} fill={ts+"0e"} stroke={ts} strokeWidth={1.5} strokeDasharray="4 3"/>)}
+          {sel&&<circle cx={px(sel.c)} cy={py(sel.r)} r={pieceR+7} fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.55)" strokeWidth={2} strokeDasharray="5 4"/>}
+          {capFlash&&<circle key={capFlash.t} cx={capFlash.x} cy={capFlash.y} r={pieceR*1.1} fill="none" stroke="#f97316" strokeWidth={2.5} style={{animation:"capRing 0.5s ease-out forwards",transformOrigin:`${capFlash.x}px ${capFlash.y}px`}}/>}
+          {nodeEls}{pieceEls}{tapEls}
+          {winner&&(<><rect x={0} y={0} width={bw} height={bh} fill="rgba(0,0,0,0.7)" rx={12}/><rect x={bw/2-95} y={bh/2-50} width={190} height={100} rx={11} fill={winBg} stroke={winStroke} strokeWidth={1.5}/><text x={bw/2} y={bh/2-12} textAnchor="middle" fontSize={17} fill={winColor} fontFamily="sans-serif" fontWeight="500">{winMsg}</text><text x={bw/2} y={bh/2+10} textAnchor="middle" fontSize={10} fill={winColor+"88"} fontFamily="sans-serif">{isDraw?"No moves — stalemate":"shroom made it across!"}</text><text x={bw/2} y={bh/2+28} textAnchor="middle" fontSize={10} fill={winColor+"66"} fontFamily="sans-serif">{`in ${moveCount} move${moveCount!==1?"s":""}`}</text></>)}
+        </svg>
+        {winner&&!isDraw&&<Confetti width={bw} height={bh}/>}
+      </div>
+
+      <div style={{display:"flex",gap:"8px",flexWrap:"wrap",justifyContent:"center",width:"100%",maxWidth:bw+"px"}}>
+        {["shroom","slug"].map(kind=>{const active=placing===kind,count=res[turn][kind+"s"];return <button key={kind} onClick={()=>startPlace(kind)} disabled={!canAct||count<=0} style={{flex:1,padding:"11px 6px",fontSize:"13px",minWidth:"100px",background:active?ts+"1e":"transparent",border:"1px solid "+(active?ts:"var(--color-border-secondary)"),color:active?ts:"var(--color-text-primary)",fontWeight:active?"500":"400",opacity:canAct&&count>0?1:0.3}}>{`+ ${kind[0].toUpperCase()+kind.slice(1)} (${count})`}</button>;})}
+        {(placing||sel)&&<button onClick={()=>{setSel(null);setHi([]);setPlacing(null);}} style={{padding:"11px 12px",fontSize:"12px",color:"var(--color-text-secondary)"}}>Cancel</button>}
+        {winner&&(<>
+          {mode!=="online"&&<button onClick={()=>reset(true)} style={{flex:1,padding:"11px",fontSize:"13px",fontWeight:"500"}}>Rematch</button>}
+          <button onClick={handleShare} style={{flex:1,padding:"11px",fontSize:"13px",color:copied?"#22c55e":"var(--color-text-secondary)",border:"1px solid "+(copied?"#22c55e44":"var(--color-border-secondary)"),transition:"all 0.2s"}}>{copied?"Copied!":"Share"}</button>
+          <button onClick={()=>reset(false)} style={{flex:1,padding:"11px",fontSize:"13px",color:"var(--color-text-secondary)"}}>Menu</button>
+        </>)}
+      </div>
+
+      <div style={{display:"flex",gap:"14px",fontSize:"11px",width:"100%",maxWidth:bw+"px",justifyContent:"center"}}>
+        <span style={{color:"#22c55e88"}}>{`Green: ${res.green.shrooms} sh, ${res.green.slugs} sl`}</span>
+        <span style={{color:"#f9731688"}}>{`Orange: ${res.orange.shrooms} sh, ${res.orange.slugs} sl`}</span>
+        <span style={{color:"var(--color-text-secondary)",opacity:0.5}}>{`Move ${moveCount}`}</span>
+      </div>
+      {(captured.green.length>0||captured.orange.length>0)&&<div style={{display:"flex",gap:"8px",width:"100%",maxWidth:bw+"px",justifyContent:"center",flexWrap:"wrap"}}>{[{pl:"green",lbl:(mode==="ai"||(mode==="online"&&onlineConfig?.myColor==="green"))?"You captured":"Green captured",items:captured.green},{pl:"orange",lbl:(mode==="online"&&onlineConfig?.myColor==="orange")?"You captured":"Orange captured",items:captured.orange}].map(e=>{if(e.items.length===0)return null;return <div key={e.pl} style={{display:"flex",alignItems:"center",gap:"3px",background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"4px 10px",border:"0.5px solid var(--color-border-tertiary)"}}><span style={{fontSize:"11px",color:PC[e.pl].stroke,marginRight:"4px"}}>{e.lbl+":"}</span>{e.items.map((kind,i)=><MiniPiece key={i} kind={kind} owner={e.pl==="green"?"orange":"green"}/>)}</div>;})}</div>}
+      {log.length>0&&<div style={{background:"var(--color-background-secondary)",borderRadius:"var(--border-radius-md)",padding:"7px 11px",width:"100%",maxWidth:bw+"px",border:"0.5px solid var(--color-border-tertiary)"}}>{log.map((l,i)=><div key={i} style={{fontSize:"11px",lineHeight:"1.75",color:"var(--color-text-secondary)",opacity:1-i*0.2}}>{l}</div>)}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Trailz));
+</script>
+</body>
+</html>
