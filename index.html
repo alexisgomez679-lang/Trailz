@@ -220,7 +220,7 @@ function StatsModal({stats,onReset,onClose,embedded}){
 const RULES_DATA=[["Goal","Get one of your shrooms to the opponent's home row first."],["Shrooms","Move diagonally forward along tan paths. Can't go backward or eat pieces."],["Slugs","Move along the green grid any direction. Move onto an enemy to eat it."],["Turn","Move a piece OR place a reserve piece on your home row. No passing."],["Blocked","Rock cells (X) cannot be entered."],["Win","First shroom to reach the far home row wins!"]];
 function RulesModal({onClose}){return <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.76)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:50,padding:"14px",borderRadius:"var(--border-radius-lg)"}}><div style={{background:"var(--color-background-primary)",borderRadius:"var(--border-radius-lg)",border:"0.5px solid var(--color-border-tertiary)",padding:"20px",maxWidth:"300px",width:"100%",marginTop:"8px",maxHeight:"calc(100% - 28px)",overflowY:"auto"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}><span style={{fontSize:"16px",fontWeight:"500"}}>How to play</span><button onClick={onClose} style={{padding:"4px 12px",fontSize:"13px"}}>Close</button></div>{RULES_DATA.map(r=><div key={r[0]} style={{marginBottom:"12px"}}><div style={{fontSize:"13px",fontWeight:"500",marginBottom:"3px"}}>{r[0]}</div><div style={{fontSize:"12px",color:"var(--color-text-secondary)",lineHeight:"1.6"}}>{r[1]}</div></div>)}</div></div>;}
 
-function OnlineLobby({onBack,onGameReady,savedDbUrl,onSaveDbUrl}){
+function OnlineLobby({onBack,onGameReady,savedDbUrl,onSaveDbUrl,onMusicStart}){
   const[dbUrl,setDbUrl]=useState(savedDbUrl||"");
   const[phase,setPhase]=useState("setup");
   const[roomCode,setRoomCode]=useState("");
@@ -240,6 +240,7 @@ function OnlineLobby({onBack,onGameReady,savedDbUrl,onSaveDbUrl}){
       const r=await fetch(url+"/games/"+code+".json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(initState)});
       if(!r.ok)throw new Error("Status "+r.status);
       onSaveDbUrl(url);setRoomCode(code);setPhase("waiting");
+      onMusicStart(); // start music on user gesture while we still have it
       const es=new EventSource(url+"/games/"+code+".json?accept=text/event-stream");
       waitingEsRef.current=es;
       es.addEventListener("put",e=>{try{const d=JSON.parse(e.data);const data=d&&d.data!==undefined?d.data:d;if(data&&data.players&&data.players.orange===true){es.close();waitingEsRef.current=null;onGameReady({dbUrl:url,roomCode:code,myColor:"green",initState:data});}}catch(err){}});
@@ -484,7 +485,7 @@ function Trailz(){
     if(showStats)return <div style={{padding:"16px",maxWidth:"360px",margin:"0 auto"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"14px"}}><span style={{fontSize:"16px",fontWeight:"500"}}>Stats</span><button onClick={()=>setShowStats(false)} style={{padding:"6px 14px",fontSize:"13px",fontWeight:"500"}}>Close</button></div><StatsModal stats={stats} onReset={()=>resetStats()} onClose={()=>setShowStats(false)} embedded={true}/></div>;
     return <ModeSelect stats={stats} muted={muted} onToggleMute={toggleMute} onShowStats={()=>setShowStats(true)} onOnline={()=>setShowOnlineLobby(true)} onSelect={(m,d,t,mk)=>{setMode(m);setDiff(d);setTimerOpt(t);setMapKey(mk);reset(true,{timerOpt:t,mapKey:mk});ambient.start();}}/>;
   }
-  if(!mode&&showOnlineLobby)return <OnlineLobby onBack={()=>setShowOnlineLobby(false)} onGameReady={handleGameReady} savedDbUrl={savedDbUrl} onSaveDbUrl={u=>{setSavedDbUrl(u);localStorage.setItem("trailz:dburl",u);}}/>;
+  if(!mode&&showOnlineLobby)return <OnlineLobby onBack={()=>setShowOnlineLobby(false)} onGameReady={handleGameReady} savedDbUrl={savedDbUrl} onSaveDbUrl={u=>{setSavedDbUrl(u);localStorage.setItem("trailz:dburl",u);}} onMusicStart={()=>ambient.start()}/>;
 
   const map=MAPS[mapKey],bl=map.blocked,isMyTurn=mode==="online"?(onlineConfig&&turn===onlineConfig.myColor):true;
   const canAct=!winner&&!showRules&&!showStats&&isMyTurn&&(mode==="ai"?!aiOn:true),ts=PC[turn].stroke;
